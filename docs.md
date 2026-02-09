@@ -35,6 +35,15 @@ Key features:
 
 ## Installation
 
+### NPM
+```bash
+npm i @teever/ez-hook
+yarn add @teever/ez-hook
+pnpm add @teever/ez-hook
+bun add @teever/ez-hook
+```
+
+### JSR
 ```bash
 # JSR (recommended)
 npx jsr add @teever/ez-hook

@@ -1,6 +1,5 @@
 version: 2
 updates:
-  # Enable version updates for npm dependencies
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -8,24 +7,17 @@ updates:
       day: "monday"
       time: "09:00"
     open-pull-requests-limit: 10
-    reviewers:
-      - "teeverc"
     commit-message:
       prefix: "chore"
       prefix-development: "chore"
-      include: "scope"
     groups:
       biome:
         patterns:
           - "@biomejs/*"
-      commitlint:
-        patterns:
-          - "@commitlint/*"
       types:
         patterns:
           - "@types/*"
 
-  # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -33,8 +25,5 @@ updates:
       day: "monday"
       time: "09:00"
     open-pull-requests-limit: 5
-    reviewers:
-      - "teeverc"
     commit-message:
       prefix: "ci"
-      include: "scope"
