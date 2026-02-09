@@ -2,6 +2,7 @@ pre-commit:
   parallel: true
   commands:
     biome:
+      glob: "*.{js,ts,jsx,tsx,json,jsonc,css}"
       run: bun biome check --write --unsafe {staged_files}
       stage_fixed: true
 

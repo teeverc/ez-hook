@@ -1,6 +1,10 @@
 {
 	"name": "@teever/ez-hook",
 	"module": "dist/index.js",
+	"description": "A simple way to send webhooks to discord with zero dependencies",
+	"author": "github.com/teeverc",
+	"version": "0.3.5",
+	"license": "MIT",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"exports": {
@@ -15,10 +19,6 @@
 		"README.md",
 		"LICENSE"
 	],
-	"description": "A simple way to send webhooks to discord with zero dependencies",
-	"author": "github.com/teeverc",
-	"version": "0.3.5",
-	"license": "MIT",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/teeverc/ez-hook.git"
