@@ -3,6 +3,12 @@
 	"module": "dist/index.js",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
 	"type": "module",
 	"files": [
 		"dist",
@@ -33,24 +39,12 @@
 		"access": "public"
 	},
 	"scripts": {
-		"start": "bun src/index.ts",
-		"dev": "bun src/index.ts",
-		"dev:watch": "bun build --watch",
 		"build": "bun run clean && tsc --project tsconfig.build.json",
-		"build:watch": "tsc --project tsconfig.build.json --watch",
-		"lint": "biome lint ./src",
-		"format": "biome check --write --unsafe ./src",
-		"check": "biome check --write ./src",
-		"check:ci": "biome check ./src",
-		"test": "bun test webhook",
-		"test:watch": "bun test --watch webhook",
-		"test:coverage": "bun test --coverage webhook",
+		"check": "biome check --write --unsafe ./src",
 		"typecheck": "tsc --noEmit",
 		"clean": "rm -rf dist build",
-		"example": "bun examples/01-enhanced-usage.ts",
-		"example:basic": "bun examples/basic-usage.ts",
-		"validate": "bun run typecheck && bun run check:ci && bun run test",
-		"prepublishOnly": "bun run validate && bun run build"
+		"prepublishOnly": "bun run build",
+		"prepare": "lefthook install"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.8",
