@@ -10,13 +10,19 @@
   - [Webhook Class](#webhook-class)
   - [Embed Class](#embed-class)
   - [RetryConfig](#retryconfig)
+  - [RequestResult](#requestresult)
+  - [Request Options](#request-options)
 - [Examples](#examples)
   - [Basic Webhook](#basic-webhook)
   - [Rich Embeds](#rich-embeds)
+  - [Multiple Embeds](#multiple-embeds)
   - [Advanced Usage](#advanced-usage)
+  - [Webhook Management](#webhook-management)
 - [Error Handling](#error-handling)
+  - [Auto Retry Behavior](#auto-retry-behavior)
+  - [Error Types](#error-types)
   - [Common Errors](#common-errors)
-  - [Validation Constraints](#validation-constraints)
+  - [Error Handling Patterns](#error-handling-patterns)
 - [Discord Limits](#discord-limits)
 - [Troubleshooting](#troubleshooting)
 
@@ -501,7 +507,81 @@ interface RetryConfig {
 }
 ```
 
+### RequestResult
+
+Return type for `send()`, `modify()`, and `get()` methods.
+
+```typescript
+interface RequestResult {
+  /** Whether the request succeeded (2xx status) */
+  ok: boolean;
+  
+  /** HTTP status code (0 on network failure) */
+  status: number;
+  
+  /** Milliseconds until retry, if provided by Discord */
+  retryAfter?: number;
+  
+  /** Raw response body text */
+  bodyText?: string;
+  
+  /** Error message for non-OK responses */
+  error?: string;
+}
+```
+
+Example usage:
+
+```typescript
+const result = await webhook.send();
+
+if (result.ok) {
+  console.log('Sent successfully');
+} else {
+  console.error(`Failed: ${result.error} (status: ${result.status})`);
+  if (result.retryAfter) {
+    console.log(`Retry after ${result.retryAfter}ms`);
+  }
+}
+```
+
+### Request Options
+
+The `send()`, `modify()`, and `get()` methods accept an optional options object:
+
+```typescript
+interface RequestOptions {
+  /** AbortSignal for cancelling the request */
+  signal?: AbortSignal;
+  
+  /** Custom headers to include in the request */
+  headers?: Record<string, string>;
+  
+  /** Timeout in milliseconds (auto-aborts if exceeded) */
+  timeoutMs?: number;
+}
+```
+
+Example usage:
+
+```typescript
+// With timeout
+const result = await webhook.send({ timeoutMs: 5000 });
+
+// With abort controller
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 10000);
+const result = await webhook.send({ signal: controller.signal });
+
+// With custom headers
+const result = await webhook.send({
+  headers: { 'X-Custom-Header': 'value' }
+});
+```
+
 ## Examples
+
+> See the [examples](./examples) directory for runnable TypeScript examples covering all features.
 
 ### Basic Webhook
 
@@ -557,6 +637,42 @@ async function sendRichEmbed() {
 }
 
 sendRichEmbed();
+```
+
+### Multiple Embeds
+
+```typescript
+import { Embed, Webhook } from '@teever/ez-hook';
+
+async function sendMultipleEmbeds() {
+  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
+
+  // Create multiple embeds (up to 10 per message)
+  const embed1 = new Embed()
+    .setTitle('First Embed')
+    .setDescription('This is the first embed')
+    .setColor('#FF0000');
+
+  const embed2 = new Embed()
+    .setTitle('Second Embed')
+    .setDescription('This is the second embed')
+    .setColor('#00FF00');
+
+  const embed3 = new Embed()
+    .setTitle('Third Embed')
+    .setDescription('This is the third embed')
+    .setColor('#0000FF');
+
+  // Chain multiple embeds
+  webhook
+    .addEmbed(embed1)
+    .addEmbed(embed2)
+    .addEmbed(embed3);
+
+  await webhook.send();
+}
+
+sendMultipleEmbeds();
 ```
 
 ### Advanced Usage
@@ -618,9 +734,95 @@ async function sendAdvancedWebhook() {
 sendAdvancedWebhook();
 ```
 
+### Webhook Management
+
+```typescript
+import { Webhook, WebhookNotFoundError, WebhookError } from '@teever/ez-hook';
+
+async function manageWebhook() {
+  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
+
+  // Check if webhook is valid
+  const isValid = await webhook.isValid();
+  if (!isValid) {
+    console.error('Webhook URL is invalid!');
+    return;
+  }
+
+  // Get webhook information
+  try {
+    const info = await webhook.get();
+    console.log('Webhook info:', info);
+  } catch (error) {
+    if (error instanceof WebhookNotFoundError) {
+      console.error('Webhook not found');
+    }
+  }
+
+  // Modify webhook settings
+  try {
+    await webhook.modify({
+      name: 'Updated Bot Name'
+    });
+  } catch (error) {
+    console.error('Failed to modify webhook:', error);
+  }
+}
+
+manageWebhook();
+```
+
 ## Error Handling
 
-EZ-Hook provides validation against Discord's limits and throws descriptive errors when limits are exceeded.
+EZ-Hook provides typed error classes for precise error handling and validation against Discord's limits.
+
+### Auto Retry Behavior
+
+EZ-Hook automatically retries failed requests with exponential backoff and jitter:
+
+- **Retried status codes**: `429` (rate limit), `5xx` (server errors), and network failures
+- **Exponential backoff**: Each retry doubles the delay (up to `maxDelay`)
+- **Jitter**: ±20% random variation to prevent thundering herd
+- **Rate limit handling**: Uses Discord's `retry-after` header when available
+
+```typescript
+// Default retry configuration
+const defaults = {
+  maxRetries: 3,      // Up to 3 retry attempts
+  baseDelay: 1000,    // Start with 1 second delay
+  maxDelay: 60000     // Cap at 60 seconds
+};
+
+// Custom configuration for high-reliability scenarios
+const webhook = new Webhook(url, {
+  maxRetries: 5,
+  baseDelay: 500,
+  maxDelay: 30000
+});
+
+// Disable retries entirely
+const webhook = new Webhook(url, { maxRetries: 0 });
+```
+
+### Error Types
+
+EZ-Hook exports a hierarchy of error classes:
+
+```
+EzHookError (base class)
+├── ValidationError
+└── WebhookError
+    ├── RateLimitError
+    └── WebhookNotFoundError
+```
+
+| Error Class | Description | Properties |
+|-------------|-------------|------------|
+| `EzHookError` | Base class for all ez-hook errors | `message`, `name` |
+| `ValidationError` | Input validation failed | `field`, `maxLength`, `actualLength` |
+| `WebhookError` | HTTP request failed | `statusCode`, `retryAfter` |
+| `RateLimitError` | Rate limited (429) | `retryAfter` (ms until retry) |
+| `WebhookNotFoundError` | Webhook URL invalid/deleted (404) | `statusCode` |
 
 ### Common Errors
 
@@ -635,29 +837,68 @@ EZ-Hook provides validation against Discord's limits and throws descriptive erro
 | `Title length exceeds 256 characters` | Embed title too long | Shorten embed title |
 | `Description length exceeds 4096 characters` | Embed description too long | Shorten embed description |
 
-### Validation Constraints
+### Error Handling Patterns
 
 ```typescript
-try {
+import {
+  Webhook,
+  Embed,
+  ValidationError,
+  RateLimitError,
+  WebhookError,
+  WebhookNotFoundError
+} from '@teever/ez-hook';
+
+async function sendWithErrorHandling() {
   const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
-  
-  // This will throw an error
-  webhook.setContent('a'.repeat(3000)); 
-} catch (error) {
-  console.error('Validation error:', error.message);
-  // Handle the error appropriately
+
+  try {
+    webhook.setContent('Hello!');
+    await webhook.send();
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      // Handle validation errors with detailed info
+      console.error(`Validation failed for "${error.field}": ${error.message}`);
+      if (error.maxLength) {
+        console.error(`Max: ${error.maxLength}, Actual: ${error.actualLength}`);
+      }
+    } else if (error instanceof RateLimitError) {
+      // Handle rate limits with retry info
+      console.error(`Rate limited! Retry after ${error.retryAfter}ms`);
+    } else if (error instanceof WebhookNotFoundError) {
+      // Handle invalid/deleted webhooks
+      console.error('Webhook URL is invalid or has been deleted');
+    } else if (error instanceof WebhookError) {
+      // Handle other HTTP errors
+      console.error(`HTTP error ${error.statusCode}: ${error.message}`);
+    } else {
+      throw error;
+    }
+  }
 }
 
-try {
-  const embed = new Embed();
-  
-  // Add 26 fields (will throw at the 26th)
-  for (let i = 0; i < 26; i++) {
-    embed.addField(`Field ${i}`, `Value ${i}`);
+// Rate limit handling with retry
+async function sendWithRetry() {
+  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
+  webhook.setContent('Message');
+
+  const maxAttempts = 3;
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
+    try {
+      await webhook.send();
+      break;
+    } catch (error) {
+      if (error instanceof RateLimitError && error.retryAfter) {
+        attempt++;
+        console.log(`Rate limited, waiting ${error.retryAfter}ms`);
+        await new Promise(resolve => setTimeout(resolve, error.retryAfter));
+      } else {
+        throw error;
+      }
+    }
   }
-} catch (error) {
-  console.error('Validation error:', error.message);
-  // Handle the error appropriately
 }
 ```
 

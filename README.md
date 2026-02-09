@@ -187,3 +187,45 @@ if (!res.ok) {
 }
 
 ```
+
+## Error Handling
+
+EZ-Hook provides typed error classes for precise error handling:
+
+```ts
+import {
+  Webhook,
+  ValidationError,
+  RateLimitError,
+  WebhookError,
+  WebhookNotFoundError
+} from '@teever/ez-hook'
+
+const hook = new Webhook('https://discord.com/api/webhooks/...')
+
+try {
+  hook.setContent('Hello!')
+  await hook.send()
+} catch (error) {
+  if (error instanceof ValidationError) {
+    console.error(`Validation failed: ${error.field}`)
+    console.error(`Max: ${error.maxLength}, Actual: ${error.actualLength}`)
+  } else if (error instanceof RateLimitError) {
+    console.error(`Rate limited! Retry after ${error.retryAfter}ms`)
+  } else if (error instanceof WebhookNotFoundError) {
+    console.error('Webhook URL is invalid or deleted')
+  } else if (error instanceof WebhookError) {
+    console.error(`HTTP error ${error.statusCode}: ${error.message}`)
+  }
+}
+```
+
+## Examples
+
+See the [examples](./examples) directory for more usage patterns:
+
+- [Basic usage](./examples/02-basic-usage.ts) - simple messages, overrides, TTS
+- [Multiple embeds](./examples/03-multiple-embeds.ts) - dashboards, catalogs, leaderboards  
+- [Embed features](./examples/04-embed-features.ts) - all embed options, colors, fields
+- [Webhook management](./examples/05-webhook-management.ts) - get/modify webhooks
+- [Error handling](./examples/06-error-handling.ts) - comprehensive error patterns

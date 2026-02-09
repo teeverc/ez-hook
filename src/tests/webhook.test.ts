@@ -7,6 +7,7 @@ import {
 	spyOn,
 	test
 } from 'bun:test'
+import { RateLimitError, WebhookError } from '../classes/Errors'
 import type { RequestClient } from '../classes/RequestClient'
 import * as RequestClientModule from '../classes/RequestClient'
 import { Embed, Webhook } from '../index'
@@ -1233,5 +1234,43 @@ describe('delay function', () => {
 		delaySpyOn = spyOn(RequestClientModule, 'delay').mockImplementation(() =>
 			Promise.resolve()
 		)
+	})
+})
+
+describe('error classes', () => {
+	test('should create WebhookError with all properties', () => {
+		const error = new WebhookError('Request failed', 500, 1000)
+
+		expect(error.message).toBe('Request failed')
+		expect(error.statusCode).toBe(500)
+		expect(error.retryAfter).toBe(1000)
+		expect(error.name).toBe('WebhookError')
+		expect(error).toBeInstanceOf(Error)
+	})
+
+	test('should create WebhookError with optional properties', () => {
+		const error = new WebhookError('Request failed')
+
+		expect(error.message).toBe('Request failed')
+		expect(error.statusCode).toBeUndefined()
+		expect(error.retryAfter).toBeUndefined()
+	})
+
+	test('should create RateLimitError with retryAfter', () => {
+		const error = new RateLimitError(5000)
+
+		expect(error.message).toBe('Rate limit exceeded')
+		expect(error.statusCode).toBe(429)
+		expect(error.retryAfter).toBe(5000)
+		expect(error.name).toBe('RateLimitError')
+		expect(error).toBeInstanceOf(WebhookError)
+	})
+
+	test('should create RateLimitError without retryAfter', () => {
+		const error = new RateLimitError()
+
+		expect(error.message).toBe('Rate limit exceeded')
+		expect(error.statusCode).toBe(429)
+		expect(error.retryAfter).toBeUndefined()
 	})
 })
