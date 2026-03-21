@@ -23,7 +23,7 @@ let delaySpyOn: ReturnType<typeof spyOn>
 beforeEach(() => {
 	// Reset and setup fetch mock before each test
 	mockFetch = mock(() => Promise.resolve(new Response('', { status: 204 })))
-	// biome-ignore lint/suspicious/noExplicitAny: Required for global fetch mocking
+	// oxlint-disable-next-line no-explicit-any -- Required for global fetch mocking
 	global.fetch = mockFetch as any
 
 	// Spy on and mock the delay function to make retry tests instant
@@ -1159,7 +1159,7 @@ describe('webhook validation method', () => {
 		const webhook = new Webhook(TEST_WEBHOOK_URL)
 
 		// Use reflection to set content without triggering setContent validation
-		// biome-ignore lint/suspicious/noExplicitAny: testing internal state
+		// oxlint-disable-next-line no-explicit-any -- testing internal state
 		;(webhook as any).content = 'a'.repeat(2001)
 
 		expect(() => {
@@ -1175,7 +1175,7 @@ describe('webhook validation method', () => {
 		for (let i = 0; i < 11; i++) {
 			embeds.push(new Embed().setTitle(`Embed ${i}`).toObject())
 		}
-		// biome-ignore lint/suspicious/noExplicitAny: testing internal state
+		// oxlint-disable-next-line no-explicit-any -- testing internal state
 		;(webhook as any).embeds = embeds
 
 		expect(() => {
@@ -1192,7 +1192,7 @@ describe('webhook validation method', () => {
 		for (let i = 0; i < 26; i++) {
 			fields.push({ name: `Field ${i}`, value: 'Value', inline: false })
 		}
-		// biome-ignore lint/suspicious/noExplicitAny: testing internal state
+		// oxlint-disable-next-line no-explicit-any -- testing internal state
 		;(embed as any).fields = fields
 
 		webhook.addEmbed(embed)
@@ -1208,7 +1208,7 @@ describe('webhook validation method', () => {
 		// Create an embed with a field that has a too-long name
 		const embed = new Embed()
 		const fields = [{ name: 'a'.repeat(256), value: 'Value', inline: false }]
-		// biome-ignore lint/suspicious/noExplicitAny: testing internal state
+		// oxlint-disable-next-line no-explicit-any -- testing internal state
 		;(embed as any).fields = fields
 
 		webhook.addEmbed(embed)
