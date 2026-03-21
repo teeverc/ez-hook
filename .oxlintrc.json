@@ -1,0 +1,14 @@
+{
+	"plugins": ["import", "jest"],
+	"rules": {
+		"typescript/no-explicit-any": "warn",
+		"unicorn/no-invalid-fetch-options": "off"
+	},
+	"categories": {
+		"suspicious": "warn"
+	},
+	"env": {
+		"builtin": true
+	},
+	"ignorePatterns": ["dist", "build"]
+}

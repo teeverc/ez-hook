@@ -1,9 +1,13 @@
 pre-commit:
   parallel: true
   commands:
-    biome:
-      glob: "*.{js,ts,jsx,tsx,json,jsonc,css}"
-      run: bun biome check --write --unsafe {staged_files}
+    format:
+      glob: '*.{js,ts,jsx,tsx,json,jsonc,css}'
+      run: bun oxfmt {staged_files}
+      stage_fixed: true
+    lint:
+      glob: '*.{js,ts,jsx,tsx}'
+      run: bun oxlint --config .oxlintrc.json --fix --fix-suggestions --deny-warnings {staged_files}
       stage_fixed: true
 
 pre-push:
