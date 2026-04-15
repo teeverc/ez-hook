@@ -45,6 +45,7 @@
 		"format:write": "oxfmt .oxlintrc.json .oxfmtrc.json '**/*.{js,ts,jsx,tsx,json,jsonc,css}'",
 		"lint": "oxlint --config .oxlintrc.json --deny-warnings src examples",
 		"lint:fix": "oxlint --config .oxlintrc.json --fix --fix-suggestions --deny-warnings src examples",
+		"size": "bun run build && node scripts/size.mjs",
 		"typecheck": "tsc --noEmit",
 		"clean": "rm -rf dist build",
 		"prepublishOnly": "bun run build",

@@ -79,6 +79,20 @@ Install from JSR:
 - Overloaded methods for simpler usage
 - Structured responses with status/retry metadata
 
+## Size
+
+Current size metrics:
+
+- Entry stub: `223 B` raw
+- Published runtime JS: `20.3 kB` total across `dist/**/*.js`
+- npm package: `20.6 kB` tarball / `82.4 kB` unpacked
+
+Re-measure locally with:
+
+```sh
+bun run size
+```
+
 ## Response shape
 
 `send`, `modify`, and `get` return a `RequestResult` object:
