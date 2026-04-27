@@ -128,7 +128,12 @@ export class Embed {
 	 */
 	public setTitle(title: string): Embed {
 		if (title.length > 256) {
-			throw new Error('Title length exceeds 256 characters')
+			throw new ValidationError(
+				'Title length exceeds 256 characters',
+				'title',
+				256,
+				title.length
+			)
 		}
 		this.title = title
 		return this
@@ -153,7 +158,12 @@ export class Embed {
 	 */
 	public setDescription(description: string): Embed {
 		if (description.length > 4096) {
-			throw new Error('Description length exceeds 4096 characters')
+			throw new ValidationError(
+				'Description length exceeds 4096 characters',
+				'description',
+				4096,
+				description.length
+			)
 		}
 		this.description = description
 		return this
@@ -182,9 +192,23 @@ export class Embed {
 	 */
 	public setColor(color: number | string): Embed {
 		if (typeof color === 'string') {
-			const intColor = Number.parseInt(color.toString().replace('#', ''), 16)
+			const normalizedColor = color.startsWith('#') ? color.slice(1) : color
+			if (!/^[0-9a-fA-F]{1,6}$/.test(normalizedColor)) {
+				throw new ValidationError('Color must be a valid hex color', 'color')
+			}
+
+			const intColor = Number.parseInt(normalizedColor, 16)
 			this.color = intColor
 		} else {
+			if (!Number.isInteger(color) || color < 0 || color > 0xffffff) {
+				throw new ValidationError(
+					'Color must be an integer between 0 and 16777215',
+					'color',
+					0xffffff,
+					color
+				)
+			}
+
 			this.color = color
 		}
 

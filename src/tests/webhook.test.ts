@@ -7,7 +7,11 @@ import {
 	spyOn,
 	test
 } from 'bun:test'
-import { RateLimitError, WebhookError } from '../classes/Errors'
+import {
+	RateLimitError,
+	ValidationError,
+	WebhookError
+} from '../classes/Errors'
 import type { RequestClient } from '../classes/RequestClient'
 import * as RequestClientModule from '../classes/RequestClient'
 import { Embed, Webhook } from '../index'
@@ -483,6 +487,17 @@ describe('webhook validation', () => {
 
 		expect(isValid).toBeFalse()
 	})
+
+	test('should invalidate webhook with non-ok HTTP response', async () => {
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve(new Response('', { status: 404 }))
+		)
+
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		const isValid = await webhook.isValid()
+
+		expect(isValid).toBeFalse()
+	})
 })
 
 describe('webhook TTS functionality', () => {
@@ -522,12 +537,15 @@ describe('webhook file attachment', () => {
 
 		await webhook.send()
 
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				body: expect.stringContaining('"file":"file-content"')
-			})
+		const request = mockFetch.mock.calls[0][1]
+		expect(request?.body).toBeInstanceOf(FormData)
+		expect(request?.headers).not.toHaveProperty('Content-Type')
+
+		const formData = request?.body as FormData
+		expect(formData.get('payload_json')).toContain(
+			'"content":"Message with file"'
 		)
+		expect(formData.get('files[0]')).toBeInstanceOf(File)
 	})
 
 	test('should set file attachment as object', async () => {
@@ -537,12 +555,91 @@ describe('webhook file attachment', () => {
 
 		await webhook.send()
 
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				body: expect.stringContaining('"filename":"test.txt"')
+		const request = mockFetch.mock.calls[0][1]
+		expect(request?.body).toBeInstanceOf(FormData)
+
+		const formData = request?.body as FormData
+		const payload = JSON.parse(formData.get('payload_json') as string)
+		expect(payload.file).toBeUndefined()
+		expect(formData.get('files[0]')).toBeInstanceOf(File)
+	})
+
+	test('should decode base64 file attachment data', async () => {
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		webhook
+			.setFile({
+				filename: 'test.txt',
+				data: btoa('decoded content'),
+				encoding: 'base64'
 			})
-		)
+			.setContent('Message with base64 file object')
+
+		await webhook.send()
+
+		const request = mockFetch.mock.calls[0][1]
+		const formData = request?.body as FormData
+		const file = formData.get('files[0]') as File
+
+		expect(await file.text()).toBe('decoded content')
+	})
+
+	test('should preserve byte array file attachment data', async () => {
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		webhook
+			.setFile({
+				filename: 'bytes.bin',
+				data: new Uint8Array([1, 2, 3])
+			})
+			.setContent('Message with byte file object')
+
+		await webhook.send()
+
+		const request = mockFetch.mock.calls[0][1]
+		const formData = request?.body as FormData
+		const file = formData.get('files[0]') as File
+		const bytes = new Uint8Array(await file.arrayBuffer())
+
+		expect(Array.from(bytes)).toEqual([1, 2, 3])
+	})
+
+	test('should preserve ArrayBuffer file attachment data', async () => {
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		const buffer = new Uint8Array([4, 5, 6]).buffer
+		webhook
+			.setFile({
+				filename: 'buffer.bin',
+				data: buffer
+			})
+			.setContent('Message with ArrayBuffer file object')
+
+		await webhook.send()
+
+		const request = mockFetch.mock.calls[0][1]
+		const formData = request?.body as FormData
+		const file = formData.get('files[0]') as File
+		const bytes = new Uint8Array(await file.arrayBuffer())
+
+		expect(Array.from(bytes)).toEqual([4, 5, 6])
+	})
+
+	test('should preserve Blob file attachment data and content type', async () => {
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		webhook
+			.setFile({
+				filename: 'blob.json',
+				data: new Blob(['{"ok":true}'], { type: 'application/json' })
+			})
+			.setContent('Message with Blob file object')
+
+		await webhook.send()
+
+		const request = mockFetch.mock.calls[0][1]
+		const formData = request?.body as FormData
+		const file = formData.get('files[0]') as File
+
+		expect(file.name).toBe('blob.json')
+		expect(file.type).toStartWith('application/json')
+		expect(await file.text()).toBe('{"ok":true}')
 	})
 })
 
@@ -910,6 +1007,22 @@ describe('comprehensive embed functionality', () => {
 		expect(obj.color).toBe(255)
 	})
 
+	test('should reject invalid hex color strings', () => {
+		const embed = new Embed()
+
+		expect(() => {
+			embed.setColor('not-a-color')
+		}).toThrow(ValidationError)
+	})
+
+	test('should reject color numbers outside Discord range', () => {
+		const embed = new Embed()
+
+		expect(() => {
+			embed.setColor(0x1000000)
+		}).toThrow(ValidationError)
+	})
+
 	test('should handle empty embed toObject correctly', () => {
 		const embed = new Embed()
 		const obj = embed.toObject()
@@ -1075,7 +1188,7 @@ describe('webhook management methods', () => {
 			TEST_WEBHOOK_URL,
 			expect.objectContaining({
 				method: 'GET',
-				headers: { 'Content-Type': 'application/json' },
+				headers: {},
 				body: undefined
 			})
 		)
@@ -1207,7 +1320,7 @@ describe('webhook validation method', () => {
 
 		// Create an embed with a field that has a too-long name
 		const embed = new Embed()
-		const fields = [{ name: 'a'.repeat(256), value: 'Value', inline: false }]
+		const fields = [{ name: 'a'.repeat(257), value: 'Value', inline: false }]
 		// oxlint-disable-next-line no-explicit-any -- testing internal state
 		;(embed as any).fields = fields
 
@@ -1215,7 +1328,70 @@ describe('webhook validation method', () => {
 
 		expect(() => {
 			webhook.validate()
-		}).toThrow('Field name length exceeds 255 characters')
+		}).toThrow('Field name length exceeds 256 characters')
+	})
+
+	test('should accept field names at the 256 character limit', () => {
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		const embed = new Embed().addField('a'.repeat(256), 'Value')
+
+		webhook.addEmbed(embed)
+
+		expect(() => {
+			webhook.validate()
+		}).not.toThrow()
+	})
+})
+
+describe('request client edge cases', () => {
+	test('should respect caller abort signal when timeout is also set', async () => {
+		mockFetch.mockImplementation((_url, init) => {
+			const signal = init?.signal as AbortSignal
+			return new Promise((_resolve, reject) => {
+				signal.addEventListener('abort', () => {
+					reject(new Error('aborted by caller'))
+				})
+			})
+		})
+
+		const controller = new AbortController()
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		webhook.setContent('Abort test')
+
+		const promise = webhook.send({
+			signal: controller.signal,
+			timeoutMs: 10_000
+		})
+		controller.abort()
+
+		const res = await promise
+		expect(res.ok).toBeFalse()
+		expect(res.error).toBe('aborted by caller')
+		expect(mockFetch).toHaveBeenCalledTimes(1)
+	})
+
+	test('should isolate retry counters across concurrent sends', async () => {
+		let calls = 0
+		mockFetch.mockImplementation(() => {
+			calls++
+			if (calls <= 2) {
+				return Promise.resolve(new Response('', { status: 500 }))
+			}
+
+			return Promise.resolve(new Response('', { status: 204 }))
+		})
+
+		const webhook = new Webhook(TEST_WEBHOOK_URL, {
+			maxRetries: 1,
+			baseDelay: 1
+		})
+		webhook.setContent('Concurrent retry test')
+
+		const [first, second] = await Promise.all([webhook.send(), webhook.send()])
+
+		expect(first.ok).toBeTrue()
+		expect(second.ok).toBeTrue()
+		expect(mockFetch).toHaveBeenCalledTimes(4)
 	})
 })
 

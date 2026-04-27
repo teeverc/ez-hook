@@ -153,15 +153,25 @@ const embed = new Embed().setTitle('Title').setDescription('Description');
 webhook.addEmbed(embed);
 ```
 
-##### `setFile(file: IAttachment | string): Webhook`
+##### `setFile(file: FileAttachment | string): Webhook`
 
 Sets a file to be sent with the webhook.
 
-- `file`: File content as an attachment object or string
+- `file`: File content as a string, Blob, ArrayBuffer, typed array, or attachment object
 - Returns: The webhook instance for chaining
 
 ```typescript
 webhook.setFile('file contents');
+webhook.setFile({
+  filename: 'report.txt',
+  data: new Uint8Array([1, 2, 3]),
+  contentType: 'text/plain'
+});
+webhook.setFile({
+  filename: 'report.txt',
+  data: 'ZmlsZSBjb250ZW50cw==',
+  encoding: 'base64'
+});
 ```
 
 ##### `validate(): void`

@@ -5,8 +5,10 @@
 export interface FileAttachment {
 	/** Name of the file */
 	filename: string
-	/** File content (base64 encoded or raw data) */
-	data: string
+	/** File content. Strings are sent as text unless encoding is set to "base64". */
+	data: string | Blob | ArrayBuffer | ArrayBufferView
+	/** Set to "base64" when data is a base64 encoded string. Defaults to "text". */
+	encoding?: 'text' | 'base64'
 	/** MIME type of the file */
 	contentType?: string
 	/** Description of the file */

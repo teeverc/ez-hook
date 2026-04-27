@@ -2,12 +2,13 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"noEmit": false,
+		"rootDir": "./src",
 		"outDir": "./dist",
 		"declaration": true,
 		"declarationMap": true,
 		"sourceMap": true,
 		"removeComments": false,
-		"moduleResolution": "node",
+		"moduleResolution": "bundler",
 		"allowImportingTsExtensions": false,
 		"verbatimModuleSyntax": false
 	},
