@@ -601,6 +601,46 @@ describe('webhook file attachment', () => {
 
 		expect(Array.from(bytes)).toEqual([1, 2, 3])
 	})
+
+	test('should preserve ArrayBuffer file attachment data', async () => {
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		const buffer = new Uint8Array([4, 5, 6]).buffer
+		webhook
+			.setFile({
+				filename: 'buffer.bin',
+				data: buffer
+			})
+			.setContent('Message with ArrayBuffer file object')
+
+		await webhook.send()
+
+		const request = mockFetch.mock.calls[0][1]
+		const formData = request?.body as FormData
+		const file = formData.get('files[0]') as File
+		const bytes = new Uint8Array(await file.arrayBuffer())
+
+		expect(Array.from(bytes)).toEqual([4, 5, 6])
+	})
+
+	test('should preserve Blob file attachment data and content type', async () => {
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		webhook
+			.setFile({
+				filename: 'blob.json',
+				data: new Blob(['{"ok":true}'], { type: 'application/json' })
+			})
+			.setContent('Message with Blob file object')
+
+		await webhook.send()
+
+		const request = mockFetch.mock.calls[0][1]
+		const formData = request?.body as FormData
+		const file = formData.get('files[0]') as File
+
+		expect(file.name).toBe('blob.json')
+		expect(file.type).toStartWith('application/json')
+		expect(await file.text()).toBe('{"ok":true}')
+	})
 })
 
 describe('webhook method chaining', () => {
