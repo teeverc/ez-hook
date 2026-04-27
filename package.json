@@ -1,6 +1,6 @@
 {
 	"name": "@teever/ez-hook",
-	"version": "0.3.6",
+	"version": "0.3.7",
 	"description": "A simple way to send webhooks to discord with zero dependencies",
 	"keywords": [
 		"discord",
