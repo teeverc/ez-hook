@@ -9,6 +9,7 @@ import type { Embed } from './Embed'
 import { ValidationError } from './Errors'
 import {
 	RequestClient,
+	type MultipartPayload,
 	type RequestResult,
 	type RetryConfig
 } from './RequestClient'
@@ -176,11 +177,11 @@ export class Webhook {
 			}
 
 			for (const field of embed.fields ?? []) {
-				if ((field.name?.length ?? 0) > 255) {
+				if ((field.name?.length ?? 0) > 256) {
 					throw new ValidationError(
-						'Field name length exceeds 255 characters',
+						'Field name length exceeds 256 characters',
 						'field.name',
-						255,
+						256,
 						field.name?.length
 					)
 				}
@@ -206,7 +207,7 @@ export class Webhook {
 		init?: Parameters<RequestClient['send']>[2]
 	): Promise<RequestResult> {
 		this.validate()
-		return this.client.send('POST', this.toObject(), init)
+		return this.client.send('POST', this.toRequestData(), init)
 	}
 
 	/**
@@ -240,7 +241,7 @@ export class Webhook {
 	 */
 	public async isValid(): Promise<boolean> {
 		return fetch(this.client.webhookUrl)
-			.then(() => true)
+			.then((response) => response.ok)
 			.catch(() => false)
 	}
 
@@ -257,6 +258,19 @@ export class Webhook {
 			content: this.content,
 			file: this.file as IAttachment | string | undefined,
 			embeds: this.embeds
+		}
+	}
+
+	private toRequestData(): IWebhook | MultipartPayload {
+		const payload = this.toObject()
+		const file = this.file
+
+		if (!file) return payload
+
+		const { file: _file, ...payloadWithoutFile } = payload
+		return {
+			payload: payloadWithoutFile,
+			file
 		}
 	}
 
