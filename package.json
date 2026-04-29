@@ -1,6 +1,6 @@
 {
 	"name": "@teever/ez-hook",
-	"version": "0.3.7",
+	"version": "0.3.8",
 	"description": "A simple way to send webhooks to discord with zero dependencies",
 	"keywords": [
 		"discord",
@@ -52,10 +52,10 @@
 		"prepare": "lefthook install"
 	},
 	"devDependencies": {
-		"@types/bun": "^1.3.11",
-		"lefthook": "^2.1.4",
-		"oxfmt": "^0.42.0",
-		"oxlint": "^1.56.0",
-		"typescript": "^6.0.2"
+		"@types/bun": "^1.3.13",
+		"lefthook": "^2.1.6",
+		"oxfmt": "^0.47.0",
+		"oxlint": "^1.62.0",
+		"typescript": "^6.0.3"
 	}
 }
