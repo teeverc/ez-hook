@@ -70,7 +70,7 @@ export class Embed {
 
 	/**
 	 * Description of the embed.
-	 * Up to 2048 characters.
+	 * Up to 4096 characters.
 	 */
 	protected description?: string
 
@@ -233,12 +233,14 @@ export class Embed {
 		proxy_icon_url?: string
 	): Embed {
 		if (typeof footerOrText === 'string') {
+			this.assertFooterText(footerOrText)
 			this.footer = {
 				text: footerOrText,
 				icon_url,
 				proxy_icon_url
 			}
 		} else {
+			this.assertFooterText(footerOrText.text)
 			this.footer = footerOrText
 		}
 		return this
@@ -353,12 +355,14 @@ export class Embed {
 		icon_url?: string
 	): Embed {
 		if (typeof authorOrName === 'string') {
+			this.assertAuthorName(authorOrName)
 			this.author = {
 				name: authorOrName,
 				url,
 				icon_url
 			}
 		} else {
+			if (authorOrName.name) this.assertAuthorName(authorOrName.name)
 			this.author = authorOrName
 		}
 		return this
@@ -395,10 +399,6 @@ export class Embed {
 			this.assertFieldName(fieldOrName.name)
 			this.assertFieldValue(fieldOrName.value)
 			this.fields.push(fieldOrName)
-		}
-
-		if (this.fields.length > 25) {
-			throw new ValidationError('Fields length exceeds 25', 'fields', 25)
 		}
 
 		return this
@@ -453,6 +453,28 @@ export class Embed {
 			throw new ValidationError(
 				'Field name length exceeds 256 characters',
 				'field.name',
+				256,
+				name.length
+			)
+		}
+	}
+
+	private assertFooterText(text: string): void {
+		if (text.length > 2048) {
+			throw new ValidationError(
+				'Footer text length exceeds 2048 characters',
+				'footer.text',
+				2048,
+				text.length
+			)
+		}
+	}
+
+	private assertAuthorName(name: string): void {
+		if (name.length > 256) {
+			throw new ValidationError(
+				'Author name length exceeds 256 characters',
+				'author.name',
 				256,
 				name.length
 			)

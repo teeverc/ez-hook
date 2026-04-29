@@ -239,10 +239,15 @@ export class Webhook {
 	 *
 	 * @returns Promise<boolean>
 	 */
-	public async isValid(): Promise<boolean> {
-		return fetch(this.client.webhookUrl)
-			.then((response) => response.ok)
-			.catch(() => false)
+	public async isValid(
+		init?: Parameters<RequestClient['send']>[2]
+	): Promise<boolean> {
+		try {
+			const response = await this.client.send('GET', '', init)
+			return response.ok
+		} catch {
+			return false
+		}
 	}
 
 	/**
