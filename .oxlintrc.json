@@ -1,6 +1,7 @@
 {
 	"plugins": ["import", "jest"],
 	"rules": {
+		"eslint/no-underscore-dangle": "off",
 		"typescript/no-explicit-any": "warn",
 		"unicorn/no-invalid-fetch-options": "off"
 	},
