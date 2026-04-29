@@ -119,6 +119,14 @@ describe('embed builder functionality', () => {
 		expect(res.ok).toBeTrue()
 	})
 
+	test('should reject author names exceeding 256 characters', () => {
+		const embed = new Embed()
+
+		expect(() => {
+			embed.setAuthor('a'.repeat(257))
+		}).toThrow('Author name length exceeds 256 characters')
+	})
+
 	// Test footer overloads
 	test('should set footer using simple params', async () => {
 		const webhook = new Webhook(TEST_WEBHOOK_URL)
@@ -129,6 +137,14 @@ describe('embed builder functionality', () => {
 		webhook.addEmbed(embed)
 		const res = await webhook.send()
 		expect(res.ok).toBeTrue()
+	})
+
+	test('should reject footer text exceeding 2048 characters', () => {
+		const embed = new Embed()
+
+		expect(() => {
+			embed.setFooter('a'.repeat(2049))
+		}).toThrow('Footer text length exceeds 2048 characters')
 	})
 
 	test('should set footer using object', async () => {
@@ -247,11 +263,13 @@ describe('webhook management', () => {
 
 	test('should reject invalid webhook URL', async () => {
 		// Mock fetch to reject for this specific test
-		mockFetch.mockImplementationOnce(() =>
+		mockFetch.mockImplementation(() =>
 			Promise.reject(new Error('Network error'))
 		)
 
-		const webhook = new Webhook('https://invalid.webhook.url')
+		const webhook = new Webhook('https://invalid.webhook.url', {
+			maxRetries: 0
+		})
 		const valid = await webhook.isValid()
 		expect(valid).toBeFalse()
 	})
@@ -474,15 +492,22 @@ describe('webhook validation', () => {
 		const isValid = await webhook.isValid()
 
 		expect(isValid).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledWith(TEST_WEBHOOK_URL)
+		expect(mockFetch).toHaveBeenCalledWith(
+			TEST_WEBHOOK_URL,
+			expect.objectContaining({
+				method: 'GET',
+				headers: {},
+				body: undefined
+			})
+		)
 	})
 
 	test('should invalidate webhook with failing URL', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.reject(new Error('Not found'))
-		)
+		mockFetch.mockImplementation(() => Promise.reject(new Error('Not found')))
 
-		const webhook = new Webhook('https://invalid.webhook.url')
+		const webhook = new Webhook('https://invalid.webhook.url', {
+			maxRetries: 0
+		})
 		const isValid = await webhook.isValid()
 
 		expect(isValid).toBeFalse()
@@ -497,6 +522,27 @@ describe('webhook validation', () => {
 		const isValid = await webhook.isValid()
 
 		expect(isValid).toBeFalse()
+	})
+
+	test('should pass request options through webhook validation', async () => {
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve(new Response('', { status: 200 }))
+		)
+
+		const webhook = new Webhook(TEST_WEBHOOK_URL)
+		const isValid = await webhook.isValid({
+			headers: { Authorization: 'Bot token' },
+			timeoutMs: 1000
+		})
+
+		expect(isValid).toBeTrue()
+		expect(mockFetch).toHaveBeenCalledWith(
+			TEST_WEBHOOK_URL,
+			expect.objectContaining({
+				method: 'GET',
+				headers: { Authorization: 'Bot token' }
+			})
+		)
 	})
 })
 
