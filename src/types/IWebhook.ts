@@ -1,5 +1,5 @@
-import type { IAttachment } from './IAttachment'
-import type { IEmbed } from './IEmbed'
+import type { IAttachment } from './IAttachment.js'
+import type { IEmbed } from './IEmbed.js'
 
 export interface IWebhook {
 	/**

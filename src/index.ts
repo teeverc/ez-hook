@@ -1,8 +1,8 @@
-export { Embed } from './classes/Embed'
+export { Embed } from './classes/Embed.js'
 export {
 	RateLimitError,
 	ValidationError,
 	WebhookError,
 	WebhookNotFoundError
-} from './classes/Errors'
-export { Webhook } from './classes/Webhook'
+} from './classes/Errors.js'
+export { Webhook } from './classes/Webhook.js'

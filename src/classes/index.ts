@@ -1,10 +1,10 @@
-export { Embed } from './Embed'
+export { Embed } from './Embed.js'
 export {
 	EzHookError,
 	RateLimitError,
 	ValidationError,
 	WebhookError,
 	WebhookNotFoundError
-} from './Errors'
-export { RequestClient } from './RequestClient'
-export { Webhook } from './Webhook'
+} from './Errors.js'
+export { RequestClient } from './RequestClient.js'
+export { Webhook } from './Webhook.js'

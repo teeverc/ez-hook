@@ -8,8 +8,8 @@ import type {
 	IProvider,
 	IThumbnail,
 	IVideo
-} from '../types'
-import { ValidationError } from './Errors'
+} from '../types/index.js'
+import { ValidationError } from './Errors.js'
 
 /**
  * Embed builder class

@@ -1,10 +1,10 @@
-import type { IAuthor } from './IAuthor'
-import type { IField } from './IField'
-import type { IFooter } from './IFooter'
-import type { IImage } from './IImage'
-import type { IProvider } from './IProvider'
-import type { IThumbnail } from './IThumbnail'
-import type { IVideo } from './IVideo'
+import type { IAuthor } from './IAuthor.js'
+import type { IField } from './IField.js'
+import type { IFooter } from './IFooter.js'
+import type { IImage } from './IImage.js'
+import type { IProvider } from './IProvider.js'
+import type { IThumbnail } from './IThumbnail.js'
+import type { IVideo } from './IVideo.js'
 
 export interface IEmbed {
 	/**

@@ -11,10 +11,10 @@ import {
 	RateLimitError,
 	ValidationError,
 	WebhookError
-} from '../classes/Errors'
-import type { RequestClient } from '../classes/RequestClient'
-import * as RequestClientModule from '../classes/RequestClient'
-import { Embed, Webhook } from '../index'
+} from '../classes/Errors.js'
+import type { RequestClient } from '../classes/RequestClient.js'
+import * as RequestClientModule from '../classes/RequestClient.js'
+import { Embed, Webhook } from '../index.js'
 
 // Use a mock webhook URL for testing
 const TEST_WEBHOOK_URL =
