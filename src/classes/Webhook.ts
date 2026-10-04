@@ -4,15 +4,15 @@ import type {
 	IWebhook,
 	IWebhookParameter,
 	WebhookFile
-} from '../types'
-import type { Embed } from './Embed'
-import { ValidationError } from './Errors'
+} from '../types/index.js'
+import type { Embed } from './Embed.js'
+import { ValidationError } from './Errors.js'
 import {
 	RequestClient,
 	type MultipartPayload,
 	type RequestResult,
 	type RetryConfig
-} from './RequestClient'
+} from './RequestClient.js'
 
 /**
  * Webhook class

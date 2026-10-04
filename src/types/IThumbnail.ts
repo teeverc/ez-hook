@@ -1,4 +1,4 @@
-import type { IAttachment } from './IAttachment'
+import type { IAttachment } from './IAttachment.js'
 
 export interface IThumbnail {
 	/**
