@@ -10,10 +10,9 @@ const WEBHOOK_URL =
 // Example 1: Send a simple text message
 async function _sendSimpleMessage() {
 	const webhook = new Webhook(WEBHOOK_URL)
-	webhook.setContent('Hello from ez-hook!')
 
-	const result = await webhook.send()
-	console.log('Message sent:', result)
+	const message = await webhook.send('Hello from ez-hook!')
+	console.log('Message sent:', message.id)
 }
 
 // Example 2: Send with username and avatar override

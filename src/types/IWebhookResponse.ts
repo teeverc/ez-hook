@@ -16,13 +16,13 @@ export interface IWebhookResponse {
 	 * ID of the channel this webhook belongs to.
 	 * Snowflake
 	 */
-	channel_id: string
+	channel_id: string | null
 
 	/**
 	 * ID of the guild this webhook belongs to.
 	 * Snowflake
 	 */
-	guild_id: string
+	guild_id?: string | null
 
 	/**
 	 * User that created this webhook.
@@ -32,22 +32,22 @@ export interface IWebhookResponse {
 	/**
 	 * Name of the current webhook.
 	 */
-	name: string
+	name: string | null
 
 	/**
 	 * Avatar of the current webhook.
 	 */
-	avatar: string
+	avatar: string | null
 
 	/**
 	 * Secure token of the current webhook.
 	 */
-	token: string
+	token?: string
 
 	/**
 	 * the bot/OAuth2 application that created this webhook
 	 */
-	application_id: string
+	application_id: string | null
 
 	/**
 	 * the url used for executing the webhook (returned by the webhooks OAuth2 flow)
@@ -58,7 +58,7 @@ export interface IWebhookResponse {
 	 * 	partial guild object
 	 */
 	source_guild?: {
-		id: number
+		id: string
 		name: string
 		icon?: string
 	}
@@ -67,7 +67,7 @@ export interface IWebhookResponse {
 	 * partial channel object
 	 */
 	source_channel?: {
-		id: number
+		id: string
 		name: string
 	}
 }

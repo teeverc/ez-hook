@@ -17,7 +17,11 @@ const expectedExports = {
 	'.': [
 		'Embed',
 		'Webhook',
+		'EzHookError',
+		'NetworkError',
 		'RateLimitError',
+		'RequestAbortedError',
+		'TimeoutError',
 		'ValidationError',
 		'WebhookError',
 		'WebhookNotFoundError'
@@ -91,12 +95,15 @@ try {
 	writeFileSync(
 		join(consumerDir, 'index.ts'),
 		`${imports}
-import { Embed, Webhook, ValidationError } from ${JSON.stringify(pkg.name)}
+import { Embed, Webhook, ValidationError, MessageFlags, type IMessage, type WebhookMessage } from ${JSON.stringify(pkg.name)}
 
 const hook: Webhook = new Webhook('https://discord.com/api/webhooks/1/token')
 const embed: Embed = new Embed().setTitle('hello')
 hook.addEmbed(embed)
+const message: WebhookMessage = { content: 'hi', flags: MessageFlags.SuppressNotifications }
+const send = (): Promise<IMessage> => hook.send(message)
 const error: Error = new ValidationError('x')
+void send
 export { error, ${subpaths.map((_, index) => `mod${index}`).join(', ')} }
 `
 	)

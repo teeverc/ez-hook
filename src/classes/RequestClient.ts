@@ -1,330 +1,402 @@
+import type { FileAttachment, WebhookFile } from '../types/index.js'
+import {
+	NetworkError,
+	RateLimitError,
+	RequestAbortedError,
+	TimeoutError,
+	ValidationError,
+	WebhookError,
+	WebhookNotFoundError
+} from './Errors.js'
+
 /**
- * Delays the execution of the code for a specified number of seconds.
- * @param second - The number of seconds to delay.
- * @returns A Promise that resolves after the specified number of seconds.
+ * Waits for `ms` milliseconds. Rejects early if `signal` is aborted.
+ * @internal
  */
-export function delay(second: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, second * 1000)
+export function delay(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason)
+			return
+		}
+		const onAbort = () => {
+			clearTimeout(timer)
+			reject(signal?.reason)
+		}
+		const timer = setTimeout(() => {
+			signal?.removeEventListener('abort', onAbort)
+			resolve()
+		}, ms)
+		signal?.addEventListener('abort', onAbort, { once: true })
 	})
 }
 
 export interface RetryConfig {
+	/** Maximum number of retries after the first attempt. Default: 3 */
 	maxRetries: number
+	/** Base delay for exponential backoff, in ms. Default: 1000 */
 	baseDelay: number
+	/**
+	 * Maximum delay between attempts, in ms. Default: 60000.
+	 * If Discord asks to wait longer than this, a RateLimitError is thrown instead.
+	 */
 	maxDelay: number
-}
-export interface RequestResult {
-	ok: boolean
-	status: number
-	retryAfter?: number
-	bodyText?: string
-	error?: string
-}
-
-export interface FilePayload {
-	filename: string
-	data: string | Blob | ArrayBuffer | ArrayBufferView
-	encoding?: 'text' | 'base64'
-	contentType?: string
-	description?: string
-}
-
-export interface MultipartPayload {
-	payload: unknown
-	file: string | FilePayload
 }
 
 /**
- * Class for handling HTTP requests with customizable headers, body, and parameters.
+ * Per-request options accepted by every method that talks to Discord.
+ */
+export interface RequestOptions {
+	/** Cancel the request. Throws RequestAbortedError when aborted. */
+	signal?: AbortSignal
+	/** Extra headers, merged over the webhook's default headers. */
+	headers?: HeadersInit
+	/** Timeout for each attempt, in ms. Throws TimeoutError when exceeded. */
+	timeoutMs?: number
+}
+
+export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE'
+
+/** @internal */
+export interface RequestSpec {
+	/** Path appended to the webhook URL, e.g. `/messages/123`. */
+	path?: string
+	/** Query parameters. `undefined` values are skipped. */
+	query?: Record<string, string | boolean | undefined>
+	/** JSON body. */
+	body?: unknown
+	/** Files to upload. Switches the request to multipart/form-data. */
+	files?: WebhookFile[]
+}
+
+/** @internal */
+export interface RequestClientOptions {
+	retry?: Partial<RetryConfig>
+	headers?: HeadersInit
+	timeoutMs?: number
+}
+
+const DEFAULT_RETRY_CONFIG: RetryConfig = {
+	maxRetries: 3,
+	baseDelay: 1000,
+	maxDelay: 60000
+}
+
+/**
+ * Low level HTTP client: builds requests, retries, and turns failures into typed errors.
  *
- * @class
  * @internal
- * @category Internal
  */
 export class RequestClient {
-	private static DEFAULT_RETRY_CONFIG: RetryConfig = {
-		maxRetries: 3,
-		baseDelay: 1000, // 1 second
-		maxDelay: 60000 // 60 seconds
+	public readonly webhookUrl: string
+	public readonly retryConfig: RetryConfig
+	private readonly defaultHeaders?: HeadersInit
+	private readonly defaultTimeoutMs?: number
+
+	constructor(webhookUrl: string, options: RequestClientOptions = {}) {
+		this.webhookUrl = RequestClient.assertWebhookUrl(webhookUrl)
+		this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...options.retry }
+		this.defaultHeaders = options.headers
+		this.defaultTimeoutMs = options.timeoutMs
 	}
 
-	public webhookUrl: string
-	public retryConfig: RetryConfig
+	private static assertWebhookUrl(webhookUrl: string): string {
+		let url: URL
+		try {
+			url = new URL(webhookUrl)
+		} catch {
+			throw new ValidationError('Webhook URL is not a valid URL', 'webhookUrl')
+		}
+		if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+			throw new ValidationError('Webhook URL must use http(s)', 'webhookUrl')
+		}
+		return webhookUrl
+	}
 
-	constructor(webhookUrl: string, retryConfig?: Partial<RetryConfig>) {
-		this.webhookUrl = webhookUrl
-		this.retryConfig = { ...RequestClient.DEFAULT_RETRY_CONFIG, ...retryConfig }
+	/**
+	 * Sends a request and returns the parsed JSON body (or undefined for empty responses).
+	 * Throws a WebhookError subclass on failure.
+	 */
+	public async request<T>(
+		method: HttpMethod,
+		spec: RequestSpec = {},
+		options: RequestOptions = {}
+	): Promise<T> {
+		const url = this.buildUrl(spec)
+		const { body, headers } = this.buildBody(method, spec, options.headers)
+		const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs
+		// Retrying a POST after a lost response could post the message twice.
+		const retryNetworkErrors = method !== 'POST'
+
+		for (let attempt = 0; ; attempt++) {
+			const canRetry = attempt < this.retryConfig.maxRetries
+			const attemptSignal = this.createSignal(options.signal, timeoutMs)
+			let response: Response
+			let text: string
+
+			try {
+				response = await fetch(url, {
+					method,
+					headers,
+					body,
+					signal: attemptSignal.signal
+				})
+				text = await response.text()
+			} catch (error) {
+				if (options.signal?.aborted) {
+					throw new RequestAbortedError({
+						cause: options.signal.reason ?? error
+					})
+				}
+				const networkError =
+					attemptSignal.timedOut() && timeoutMs
+						? new TimeoutError(timeoutMs, { cause: error })
+						: new NetworkError(
+								error instanceof Error && error.message
+									? error.message
+									: 'Network error',
+								{ cause: error }
+							)
+				if (retryNetworkErrors && canRetry) {
+					await this.wait(this.calculateBackoff(attempt + 1), options.signal)
+					continue
+				}
+				throw networkError
+			} finally {
+				attemptSignal.cleanup()
+			}
+
+			const data = parseBody(text)
+
+			if (response.ok) return data as T
+
+			const retryAfter = getRetryAfter(response, data)
+			const code = getErrorCode(data)
+
+			if (response.status === 429) {
+				const waitMs = retryAfter ?? this.calculateBackoff(attempt + 1)
+				if (canRetry && waitMs <= this.retryConfig.maxDelay) {
+					await this.wait(waitMs, options.signal)
+					continue
+				}
+				throw new RateLimitError(retryAfter, { code, body: data })
+			}
+
+			if (response.status >= 500 && canRetry) {
+				await this.wait(this.calculateBackoff(attempt + 1), options.signal)
+				continue
+			}
+
+			const message = formatErrorMessage(response, data)
+			if (response.status === 404) {
+				throw new WebhookNotFoundError(message, { code, body: data })
+			}
+			throw new WebhookError(message, response.status, retryAfter, {
+				code,
+				body: data
+			})
+		}
+	}
+
+	private async wait(ms: number, signal?: AbortSignal): Promise<void> {
+		try {
+			await delay(ms, signal)
+		} catch (error) {
+			throw new RequestAbortedError({ cause: error })
+		}
 	}
 
 	private calculateBackoff(retryCount: number): number {
-		// Exponential backoff with jitter
 		const exponential = Math.min(
 			this.retryConfig.maxDelay,
-			this.retryConfig.baseDelay * 2 ** retryCount
+			this.retryConfig.baseDelay * 2 ** (retryCount - 1)
 		)
-		// Add random jitter +/- 20%
+		// Random jitter of +/- 10%
 		const jitter = exponential * 0.2 * (Math.random() - 0.5)
-		const withJitter = exponential + jitter
-		return Math.max(0, withJitter)
+		return Math.max(0, exponential + jitter)
 	}
 
-	private shouldRetry(status: number, retryCount: number): boolean {
-		// Retry on rate limits and server errors
-		return (
-			retryCount < this.retryConfig.maxRetries &&
-			(status === 429 || status === 0 || (status >= 500 && status < 600))
+	private buildUrl(spec: RequestSpec): string {
+		const url = new URL(this.webhookUrl)
+		if (spec.path) {
+			url.pathname = url.pathname.replace(/\/+$/, '') + spec.path
+		}
+		for (const [key, value] of Object.entries(spec.query ?? {})) {
+			if (value !== undefined) url.searchParams.set(key, String(value))
+		}
+		return url.toString()
+	}
+
+	private buildBody(
+		method: HttpMethod,
+		spec: RequestSpec,
+		requestHeaders?: HeadersInit
+	): { body?: BodyInit; headers: Headers } {
+		const headers = new Headers(this.defaultHeaders)
+		for (const [key, value] of new Headers(requestHeaders)) {
+			headers.set(key, value)
+		}
+
+		if (method === 'GET' || method === 'DELETE' || spec.body === undefined) {
+			return { headers }
+		}
+
+		if (!spec.files?.length) {
+			if (!headers.has('content-type')) {
+				headers.set('content-type', 'application/json')
+			}
+			return { body: JSON.stringify(spec.body), headers }
+		}
+
+		// fetch sets the multipart boundary itself.
+		headers.delete('content-type')
+		const files = spec.files.map(normalizeFile)
+		const formData = new FormData()
+		formData.append(
+			'payload_json',
+			JSON.stringify({
+				...(spec.body as object),
+				attachments: files.map((file, id) => ({
+					id,
+					filename: file.filename,
+					description: file.description
+				}))
+			})
 		)
+		files.forEach((file, index) => {
+			formData.append(`files[${index}]`, createFileBlob(file), file.filename)
+		})
+
+		return { body: formData, headers }
 	}
 
 	private createSignal(
 		signal: AbortSignal | undefined,
 		timeoutMs: number | undefined
-	): { signal?: AbortSignal; cleanup: () => void } {
-		if (!timeoutMs) return { signal, cleanup: () => {} }
-
-		const timeoutController = new AbortController()
-		const timeout = setTimeout(() => timeoutController.abort(), timeoutMs)
-
-		if (!signal) {
-			return {
-				signal: timeoutController.signal,
-				cleanup: () => clearTimeout(timeout)
-			}
+	): {
+		signal?: AbortSignal
+		cleanup: () => void
+		timedOut: () => boolean
+	} {
+		if (!timeoutMs) {
+			return { signal, cleanup: () => {}, timedOut: () => false }
 		}
 
-		if (signal.aborted) timeoutController.abort(signal.reason)
+		let didTimeOut = false
+		const controller = new AbortController()
+		const timeout = setTimeout(() => {
+			didTimeOut = true
+			controller.abort()
+		}, timeoutMs)
+		const forwardAbort = () => controller.abort(signal?.reason)
 
-		const abortTimeout = () => timeoutController.abort(signal.reason)
-		signal.addEventListener('abort', abortTimeout, { once: true })
+		if (signal?.aborted) forwardAbort()
+		else signal?.addEventListener('abort', forwardAbort, { once: true })
 
 		return {
-			signal: timeoutController.signal,
+			signal: controller.signal,
+			timedOut: () => didTimeOut,
 			cleanup: () => {
 				clearTimeout(timeout)
-				signal.removeEventListener('abort', abortTimeout)
+				signal?.removeEventListener('abort', forwardAbort)
 			}
 		}
 	}
+}
 
-	private createBodyAndHeaders(
-		method: 'GET' | 'POST' | 'PATCH',
-		data: unknown,
-		headers: HeadersInit
-	): { body?: BodyInit; headers: HeadersInit } {
-		if (method === 'GET') return { headers }
+function normalizeFile(file: WebhookFile): FileAttachment {
+	return typeof file === 'string'
+		? { filename: 'file.txt', data: file, contentType: 'text/plain' }
+		: file
+}
 
-		if (this.isMultipartPayload(data)) {
-			const formData = new FormData()
-			formData.append(
-				'payload_json',
-				JSON.stringify(this.createMultipartJsonPayload(data))
+function createFileBlob(file: FileAttachment): Blob {
+	const { data, contentType: type } = file
+	if (data instanceof Blob) return data
+	if (typeof data === 'string') {
+		return new Blob([file.encoding === 'base64' ? decodeBase64(data) : data], {
+			type
+		})
+	}
+	if (data instanceof ArrayBuffer) return new Blob([data], { type })
+	// Copy the view so only its bytes (not the whole underlying buffer) are sent.
+	const bytes = new Uint8Array(data.byteLength)
+	bytes.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+	return new Blob([bytes], { type })
+}
+
+function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
+	const binary = atob(value)
+	const bytes = new Uint8Array(binary.length)
+	for (let index = 0; index < binary.length; index++) {
+		bytes[index] = binary.charCodeAt(index)
+	}
+	return bytes
+}
+
+function parseBody(text: string): unknown {
+	if (!text) return undefined
+	try {
+		return JSON.parse(text)
+	} catch {
+		return text
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null
+}
+
+function getErrorCode(data: unknown): number | undefined {
+	return isRecord(data) && typeof data.code === 'number' ? data.code : undefined
+}
+
+function getRetryAfter(response: Response, data: unknown): number | undefined {
+	// The JSON body has millisecond precision; the header is rounded up.
+	const fromBody =
+		isRecord(data) && typeof data.retry_after === 'number'
+			? data.retry_after
+			: undefined
+	const header =
+		response.headers.get('retry-after') ??
+		response.headers.get('x-ratelimit-reset-after')
+	const seconds = fromBody ?? (header ? Number.parseFloat(header) : undefined)
+	return seconds !== undefined && Number.isFinite(seconds) && seconds >= 0
+		? Math.ceil(seconds * 1000)
+		: undefined
+}
+
+/**
+ * Turns Discord's nested `errors` object into readable lines like
+ * `embeds.0.description: Must be 4096 or fewer in length.`
+ */
+function flattenDiscordErrors(errors: unknown, path = ''): string[] {
+	if (!isRecord(errors)) return []
+	const messages: string[] = []
+	for (const [key, value] of Object.entries(errors)) {
+		if (key === '_errors' && Array.isArray(value)) {
+			for (const item of value) {
+				if (isRecord(item) && typeof item.message === 'string') {
+					messages.push(path ? `${path}: ${item.message}` : item.message)
+				}
+			}
+		} else {
+			messages.push(
+				...flattenDiscordErrors(value, path ? `${path}.${key}` : key)
 			)
-
-			if (typeof data.file === 'string') {
-				formData.append('files[0]', new Blob([data.file]), 'file.txt')
-			} else {
-				const blob = this.createFileBlob(data.file)
-				formData.append('files[0]', blob, data.file.filename)
-			}
-
-			return {
-				body: formData,
-				headers: this.removeContentTypeHeader(headers)
-			}
-		}
-
-		return {
-			body: JSON.stringify(data),
-			headers: {
-				'Content-Type': 'application/json',
-				...headers
-			}
 		}
 	}
+	return messages
+}
 
-	private isMultipartPayload(data: unknown): data is MultipartPayload {
-		return (
-			typeof data === 'object' &&
-			data !== null &&
-			'payload' in data &&
-			'file' in data
-		)
+function formatErrorMessage(response: Response, data: unknown): string {
+	if (isRecord(data) && typeof data.message === 'string') {
+		const code = typeof data.code === 'number' ? ` (code ${data.code})` : ''
+		const details = flattenDiscordErrors(data.errors).slice(0, 5)
+		return details.length > 0
+			? `${data.message}${code}: ${details.join('; ')}`
+			: `${data.message}${code}`
 	}
-
-	private createMultipartJsonPayload(data: MultipartPayload): unknown {
-		if (typeof data.payload !== 'object' || data.payload === null) {
-			return data.payload
-		}
-
-		const filename =
-			typeof data.file === 'string' ? 'file.txt' : data.file.filename
-		const description =
-			typeof data.file === 'string' ? undefined : data.file.description
-
-		return {
-			...data.payload,
-			attachments: [
-				{
-					id: 0,
-					filename,
-					description
-				}
-			]
-		}
-	}
-
-	private createFileBlob(file: FilePayload): Blob {
-		if (file.data instanceof Blob) return file.data
-
-		if (typeof file.data === 'string' && file.encoding === 'base64') {
-			return new Blob([this.decodeBase64(file.data)], {
-				type: file.contentType
-			})
-		}
-
-		return new Blob([this.toBlobPart(file.data)], { type: file.contentType })
-	}
-
-	private toBlobPart(data: FilePayload['data']): BlobPart {
-		if (data instanceof Blob) return data
-		if (typeof data === 'string' || data instanceof ArrayBuffer) return data
-
-		const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-		return new Uint8Array(bytes).buffer as ArrayBuffer
-	}
-
-	private decodeBase64(value: string): ArrayBuffer {
-		const binary = atob(value)
-		const bytes = new Uint8Array(binary.length)
-
-		for (let index = 0; index < binary.length; index++) {
-			bytes[index] = binary.charCodeAt(index)
-		}
-
-		return bytes.buffer as ArrayBuffer
-	}
-
-	private isAbortError(
-		error: unknown,
-		signal: AbortSignal | undefined
-	): boolean {
-		return (
-			signal?.aborted === true ||
-			(error instanceof DOMException && error.name === 'AbortError') ||
-			(error instanceof Error && error.name === 'AbortError')
-		)
-	}
-
-	private removeContentTypeHeader(headers: HeadersInit): HeadersInit {
-		if (headers instanceof Headers) {
-			const nextHeaders = new Headers(headers)
-			nextHeaders.delete('content-type')
-			return nextHeaders
-		}
-
-		if (Array.isArray(headers)) {
-			return headers.filter(([key]) => key.toLowerCase() !== 'content-type')
-		}
-
-		return Object.fromEntries(
-			Object.entries(headers).filter(
-				([key]) => key.toLowerCase() !== 'content-type'
-			)
-		)
-	}
-
-	public async send(
-		method: 'GET' | 'POST' | 'PATCH',
-		data: unknown,
-		init?: Pick<RequestInit, 'signal' | 'headers'> & { timeoutMs?: number }
-	): Promise<RequestResult> {
-		let retryCount = 0
-
-		while (true) {
-			const { signal, headers = {}, timeoutMs } = init ?? {}
-			const requestSignal = this.createSignal(signal ?? undefined, timeoutMs)
-			const request = this.createBodyAndHeaders(method, data, headers)
-
-			try {
-				const response = await fetch(this.webhookUrl, {
-					method,
-					headers: request.headers,
-					body: request.body,
-					signal: requestSignal.signal ?? undefined
-				})
-
-				const text = await response.text()
-				const retryAfterHeader =
-					response.headers.get('retry-after') ??
-					response.headers.get('x-ratelimit-reset-after') ??
-					undefined
-				const retryAfterSeconds = retryAfterHeader
-					? Number.parseFloat(retryAfterHeader)
-					: undefined
-
-				const retryAfterMs =
-					Number.isFinite(retryAfterSeconds) && retryAfterSeconds
-						? retryAfterSeconds * 1000
-						: undefined
-
-				if (response.ok) {
-					return {
-						ok: true,
-						status: response.status,
-						retryAfter: retryAfterMs,
-						bodyText: text || undefined
-					}
-				}
-
-				if (this.shouldRetry(response.status, retryCount)) {
-					retryCount++
-					const delayMs =
-						response.status === 429
-							? (retryAfterMs ?? this.calculateBackoff(retryCount))
-							: this.calculateBackoff(retryCount)
-
-					await delay(delayMs / 1000)
-					continue
-				}
-
-				return {
-					ok: false,
-					status: response.status,
-					retryAfter: retryAfterMs,
-					bodyText: text || undefined,
-					error: text || response.statusText || `HTTP ${response.status}`
-				}
-			} catch (_error) {
-				const message =
-					_error instanceof Error
-						? _error.message
-						: _error
-							? String(_error)
-							: ''
-
-				if (this.isAbortError(_error, requestSignal.signal)) {
-					return {
-						ok: false,
-						status: 0,
-						error: message || 'Request aborted'
-					}
-				}
-
-				if (this.shouldRetry(0, retryCount)) {
-					retryCount++
-					await delay(this.calculateBackoff(retryCount) / 1000)
-					continue
-				}
-
-				return {
-					ok: false,
-					status: 0,
-					error: message || 'Network error'
-				}
-			} finally {
-				requestSignal.cleanup()
-			}
-		}
-	}
+	if (typeof data === 'string' && data) return data
+	return response.statusText || `HTTP ${response.status}`
 }

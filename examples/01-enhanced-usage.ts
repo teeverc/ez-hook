@@ -1,109 +1,73 @@
 /**
- * Enhanced usage examples demonstrating new features
+ * Quick start - the one-call API introduced in 0.5.0
  */
 
-import {
-	Embed,
-	RateLimitError,
-	ValidationError,
-	Webhook,
-	WebhookError
-} from '../src/index'
+import { Embed, MessageFlags, Webhook, WebhookError } from '../src/index'
 
-// Example 1: Enhanced error handling
-async function _exampleWithErrorHandling() {
-	const webhook = new Webhook(
-		'https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN'
-	)
+const WEBHOOK_URL =
+	'https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN'
 
+// One client, configured once, reused everywhere
+const hook = new Webhook(WEBHOOK_URL, {
+	username: 'Deploy Bot',
+	allowedMentions: { parse: [] }, // never ping anyone by accident
+	retry: { maxRetries: 5 },
+	timeoutMs: 10_000
+})
+
+// Example 1: Send a string - returns the created message
+async function _sendText() {
+	const message = await hook.send('Deploy finished ✅')
+	console.log(`Sent message ${message.id}`)
+}
+
+// Example 2: Send a full message in one call
+async function _sendMessage() {
+	await hook.send({
+		content: 'Nightly report',
+		embeds: [
+			new Embed()
+				.setTitle('Build #128')
+				.setColor('#00ff00')
+				.addField('Duration', '4m 12s', true)
+				.addField('Tests', '312 passed', true)
+				.setTimestamp(),
+			// Plain objects work too
+			{ title: 'Coverage', description: '91.2%', color: 0x5865f2 }
+		],
+		files: [{ filename: 'report.json', data: JSON.stringify({ ok: true }) }],
+		flags: ['SuppressNotifications']
+	})
+}
+
+// Example 3: Flags as a bitfield
+async function _sendSilently() {
+	await hook.send({
+		content: 'https://example.com (no link preview, no notification)',
+		flags: MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications
+	})
+}
+
+// Example 4: Errors are thrown by default...
+async function _handleErrors() {
 	try {
-		// This will throw a ValidationError
-		webhook.setContent('a'.repeat(2001))
+		await hook.send('Hello')
 	} catch (error) {
-		if (error instanceof ValidationError) {
-			console.log(`Validation failed: ${error.message}`)
-			console.log(`Field: ${error.field}`)
-			console.log(
-				`Max length: ${error.maxLength}, Actual: ${error.actualLength}`
+		if (error instanceof WebhookError) {
+			console.error(
+				`Discord said ${error.status} (code ${error.code}): ${error.message}`
 			)
 		}
-	}
-
-	try {
-		const result = await webhook.send()
-		console.log('Webhook sent successfully:', result)
-	} catch (error) {
-		if (error instanceof RateLimitError) {
-			console.log(`Rate limited! Retry after: ${error.retryAfter}ms`)
-		} else if (error instanceof WebhookError) {
-			console.log(
-				`Webhook error: ${error.message} (Status: ${error.statusCode})`
-			)
-		}
+		throw error
 	}
 }
 
-// Example 2: Building complex embeds with validation
-async function _exampleComplexEmbed() {
-	const webhook = new Webhook(
-		'https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN'
-	)
-
-	const embed = new Embed()
-		.setTitle('Server Status Update')
-		.setDescription('All systems operational')
-		.setColor('#00FF00')
-		.setAuthor({
-			name: 'System Monitor',
-			url: 'https://status.example.com',
-			icon_url: 'https://example.com/icon.png'
-		})
-		.addField('CPU Usage', '45%', true)
-		.addField('Memory Usage', '67%', true)
-		.addField('Disk Usage', '23%', true)
-		.addField('Network Status', '✅ Online', false)
-		.setFooter({
-			text: 'Last updated',
-			icon_url: 'https://example.com/footer-icon.png'
-		})
-		.setTimestamp()
-
-	webhook.addEmbed(embed)
-
-	try {
-		const success = await webhook.send()
-		if (success) {
-			console.log('Status update sent successfully!')
-		} else {
-			console.log('Failed to send status update')
-		}
-	} catch (error) {
-		console.error('Unexpected error:', error)
+// Example 5: ...or use trySend for a result object
+async function _trySend() {
+	const result = await hook.trySend('Hello')
+	if (!result.ok) {
+		console.error('Webhook failed:', result.error.message)
+		return
 	}
+	console.log('Sent', result.data.id)
 }
-
-// Example 3: Retry configuration with custom settings
-async function _exampleWithRetryConfig() {
-	const webhook = new Webhook(
-		'https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN',
-		{
-			maxRetries: 5,
-			baseDelay: 500,
-			maxDelay: 30000
-		}
-	)
-
-	webhook.setContent('Message with custom retry configuration')
-
-	try {
-		const result = await webhook.send()
-		console.log('Message sent with custom retry config:', result)
-	} catch (error) {
-		console.error('Failed after all retries:', error)
-	}
-}
-
-// Run examples (uncomment to test)
-// exampleWithErrorHandling()
-// exampleComplexEmbed()
-// exampleWithRetryConfig()

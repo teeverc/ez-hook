@@ -26,7 +26,7 @@ export interface IEmbed {
 
 	/**
 	 * Description of the embed.
-	 * Up to 2048 characters.
+	 * Up to 4096 characters.
 	 */
 	description?: string
 

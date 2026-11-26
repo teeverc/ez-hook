@@ -10,488 +10,308 @@ import type {
 	IVideo
 } from '../types/index.js'
 import { ValidationError } from './Errors.js'
+import { Limits, assertMaxCount, assertMaxLength } from './validate.js'
 
 /**
- * Embed builder class
+ * Embed builder.
  *
  * ```ts
- * import { Webhook, Embed } from '@teever/ez-hook'
+ * import { Embed, Webhook } from '@teever/ez-hook'
  *
  * const embed = new Embed()
- * 	.setTitle('Title')
- * 	.setDescription('Description')
- * 	.setColor(0x00ff00)
- * 	.setImage({
- * 		url: 'https://example.com/image.png'
- * 	})
- * 	.setAuthor({
- * 		name: 'Author',
- * 		url: 'https://example.com/author'
- * 	})
- * 	.addField({
- * 		name: 'Field 1',
- * 		value: 'Value 1',
- * 		inline: true
- * 	})
- * 	.addField({
- * 		name: 'Field 2',
- * 		value: 'Value 2',
- * 		inline: true
- * 	})
- * 	.addField({
- * 		name: 'Field 3',
- * 		value: 'Value 3',
- * 		inline: false
- * 	})
+ * 	.setTitle('Deploy finished')
+ * 	.setDescription('All checks passed')
+ * 	.setColor('#00ff00')
+ * 	.addField('Duration', '42s', true)
+ * 	.setTimestamp()
  *
- * const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz')
+ * await new Webhook(url).send({ embeds: [embed] })
  *
- * const success = await webhook.addEmbed(embed).send()
+ * // Or start from a plain object
+ * const fromObject = new Embed({ title: 'Hello', color: 0x5865f2 })
  * ```
  */
-
 export class Embed {
-	/**
-	 * Title of the embed.
-	 * Up to 256 characters.
-	 */
-	protected title?: string
+	protected data: IEmbed
 
 	/**
-	 * Embed type.
-	 * (Always "rich" for webhook embeds)
+	 * @param data Optional plain embed object to start from.
 	 */
-	protected type = 'rich'
-
-	/**
-	 * URL of embed.
-	 */
-	protected url?: string
-
-	/**
-	 * Description of the embed.
-	 * Up to 4096 characters.
-	 */
-	protected description?: string
-
-	/**
-	 * ISO8601 timestamp of the embed content.
-	 */
-	protected timestamp?: string
-
-	/**
-	 * color code of the embed.
-	 */
-	protected color?: number
-
-	/**
-	 * Footer information.
-	 */
-	protected footer?: IFooter
-
-	/**
-	 * Image information.
-	 */
-	protected image?: IImage
-
-	/**
-	 * Thumbnail information.
-	 */
-	protected thumbnail?: IThumbnail
-
-	/**
-	 * Video information.
-	 */
-	protected video?: IVideo
-
-	/**
-	 * Provider information.
-	 */
-	protected provider?: IProvider
-
-	/**
-	 * Author information.
-	 */
-	protected author?: IAuthor
-
-	/**
-	 * Fields information.
-	 * Up to 25 fields.
-	 */
-	protected fields?: Array<IField>
-
-	/**
-	 * Set Title of the embed.
-	 *
-	 * @param title string
-	 * @returns this
-	 */
-	public setTitle(title: string): Embed {
-		if (title.length > 256) {
-			throw new ValidationError(
-				'Title length exceeds 256 characters',
-				'title',
-				256,
-				title.length
-			)
+	constructor(data: IEmbed = {}) {
+		this.data = {
+			...data,
+			fields: data.fields ? [...data.fields] : undefined
 		}
-		this.title = title
+	}
+
+	/**
+	 * Create an embed from a plain object.
+	 */
+	public static from(data: IEmbed): Embed {
+		return new Embed(data)
+	}
+
+	/**
+	 * Set the title (max 256 characters).
+	 */
+	public setTitle(title: string): this {
+		assertMaxLength(title, Limits.embedTitle, 'title', 'Title')
+		this.data.title = title
 		return this
 	}
 
 	/**
-	 * Set URL of embed.
-	 *
-	 * @param url string
-	 * @returns this
+	 * Set the URL the title links to.
 	 */
-	public setURL(url: string): Embed {
-		this.url = url
+	public setUrl(url: string): this {
+		this.data.url = url
 		return this
 	}
 
 	/**
-	 * Description of the embed.
-	 *
-	 * @param description string
-	 * @returns Embed
+	 * @deprecated Use {@link Embed.setUrl}.
 	 */
-	public setDescription(description: string): Embed {
-		if (description.length > 4096) {
-			throw new ValidationError(
-				'Description length exceeds 4096 characters',
-				'description',
-				4096,
-				description.length
-			)
+	public setURL(url: string): this {
+		return this.setUrl(url)
+	}
+
+	/**
+	 * Set the description (max 4096 characters).
+	 */
+	public setDescription(description: string): this {
+		assertMaxLength(
+			description,
+			Limits.embedDescription,
+			'description',
+			'Description'
+		)
+		this.data.description = description
+		return this
+	}
+
+	/**
+	 * Set the timestamp shown in the footer. Defaults to now.
+	 */
+	public setTimestamp(date: Date | number | string = new Date()): this {
+		const value = new Date(date)
+		if (Number.isNaN(value.getTime())) {
+			throw new ValidationError('Timestamp is not a valid date', 'timestamp')
 		}
-		this.description = description
+		this.data.timestamp = value.toISOString()
 		return this
 	}
 
 	/**
-	 * Set ISO8601 timestamp of the embed content.
-	 *
-	 * @returns this
+	 * Set the side color, as a number (`0x5865f2`) or hex string (`'#5865f2'` or `'5865f2'`).
 	 */
-	public setTimestamp(date?: Date): Embed {
-		if (date) {
-			this.timestamp = date.toISOString()
+	public setColor(color: number | string): this {
+		if (typeof color === 'string') {
+			const hex = color.startsWith('#') ? color.slice(1) : color
+			if (!/^[0-9a-fA-F]{1,6}$/.test(hex)) {
+				throw new ValidationError('Color must be a valid hex color', 'color')
+			}
+			this.data.color = Number.parseInt(hex, 16)
 			return this
 		}
 
-		this.timestamp = new Date().toISOString()
-		return this
-	}
-
-	/**
-	 * Set color code of the embed.
-	 *
-	 * @param color - number | string
-	 * @returns this
-	 */
-	public setColor(color: number | string): Embed {
-		if (typeof color === 'string') {
-			const normalizedColor = color.startsWith('#') ? color.slice(1) : color
-			if (!/^[0-9a-fA-F]{1,6}$/.test(normalizedColor)) {
-				throw new ValidationError('Color must be a valid hex color', 'color')
-			}
-
-			const intColor = Number.parseInt(normalizedColor, 16)
-			this.color = intColor
-		} else {
-			if (!Number.isInteger(color) || color < 0 || color > 0xffffff) {
-				throw new ValidationError(
-					'Color must be an integer between 0 and 16777215',
-					'color',
-					0xffffff,
-					color
-				)
-			}
-
-			this.color = color
+		if (!Number.isInteger(color) || color < 0 || color > 0xffffff) {
+			throw new ValidationError(
+				'Color must be an integer between 0 and 16777215',
+				'color',
+				0xffffff,
+				color
+			)
 		}
-
+		this.data.color = color
 		return this
 	}
 
 	/**
-	 * Set Footer information.
-	 *
-	 * @param footer Footer
-	 * @returns this
+	 * Set the footer (text max 2048 characters).
 	 */
-	public setFooter(footer: IFooter): Embed
+	public setFooter(footer: IFooter): this
 	public setFooter(
 		text: string,
 		icon_url?: string | IAttachment,
 		proxy_icon_url?: string
-	): Embed
+	): this
 	public setFooter(
 		footerOrText: IFooter | string,
 		icon_url?: string | IAttachment,
 		proxy_icon_url?: string
-	): Embed {
-		if (typeof footerOrText === 'string') {
-			this.assertFooterText(footerOrText)
-			this.footer = {
-				text: footerOrText,
-				icon_url,
-				proxy_icon_url
-			}
-		} else {
-			this.assertFooterText(footerOrText.text)
-			this.footer = footerOrText
-		}
+	): this {
+		const footer =
+			typeof footerOrText === 'string'
+				? { text: footerOrText, icon_url, proxy_icon_url }
+				: footerOrText
+		assertMaxLength(
+			footer.text,
+			Limits.footerText,
+			'footer.text',
+			'Footer text'
+		)
+		this.data.footer = footer
 		return this
 	}
 
 	/**
-	 * Set Image information
-	 *
-	 * @param image Image
-	 * @returns this
+	 * Set the large image.
 	 */
-	public setImage(image: IImage): Embed
-	public setImage(url: string, height?: number, width?: number): Embed
+	public setImage(image: IImage): this
+	public setImage(url: string, height?: number, width?: number): this
 	public setImage(
 		imageOrUrl: IImage | string,
 		height?: number,
 		width?: number
-	): Embed {
-		if (typeof imageOrUrl === 'string') {
-			this.image = {
-				url: imageOrUrl,
-				height,
-				width
-			}
-		} else {
-			this.image = imageOrUrl
-		}
+	): this {
+		this.data.image =
+			typeof imageOrUrl === 'string'
+				? { url: imageOrUrl, height, width }
+				: imageOrUrl
 		return this
 	}
 
 	/**
-	 * Set Thumbnail information
-	 *
-	 * @param thumbnail Thumbnail
-	 * @returns this
+	 * Set the small thumbnail image.
 	 */
-	public setThumbnail(thumbnail: IThumbnail): Embed
-	public setThumbnail(url: string, height?: number, width?: number): Embed
+	public setThumbnail(thumbnail: IThumbnail): this
+	public setThumbnail(url: string, height?: number, width?: number): this
 	public setThumbnail(
 		thumbnailOrUrl: IThumbnail | string,
 		height?: number,
 		width?: number
-	): Embed {
-		if (typeof thumbnailOrUrl === 'string') {
-			this.thumbnail = {
-				url: thumbnailOrUrl,
-				height,
-				width
-			}
-		} else {
-			this.thumbnail = thumbnailOrUrl
-		}
+	): this {
+		this.data.thumbnail =
+			typeof thumbnailOrUrl === 'string'
+				? { url: thumbnailOrUrl, height, width }
+				: thumbnailOrUrl
 		return this
 	}
 
 	/**
-	 * Set Video information
-	 *
-	 * @param video Video
-	 * @returns this
+	 * Set video information.
+	 * Note: Discord ignores videos in embeds sent by webhooks.
 	 */
-	public setVideo(video: IVideo): Embed
-	public setVideo(url: string, height?: number, width?: number): Embed
+	public setVideo(video: IVideo): this
+	public setVideo(url: string, height?: number, width?: number): this
 	public setVideo(
 		videoOrUrl: IVideo | string,
 		height?: number,
 		width?: number
-	): Embed {
-		if (typeof videoOrUrl === 'string') {
-			this.video = {
-				url: videoOrUrl,
-				height,
-				width
-			}
-		} else {
-			this.video = videoOrUrl
-		}
+	): this {
+		this.data.video =
+			typeof videoOrUrl === 'string'
+				? { url: videoOrUrl, height, width }
+				: videoOrUrl
 		return this
 	}
 
 	/**
-	 * Set Provider information
-	 *
-	 * @param provider Provider
-	 * @returns this
+	 * Set provider information.
+	 * Note: Discord ignores providers in embeds sent by webhooks.
 	 */
-	public setProvider(provider: IProvider): Embed
-	public setProvider(name: string, url?: string): Embed
-	public setProvider(providerOrName: IProvider | string, url?: string): Embed {
-		if (typeof providerOrName === 'string') {
-			this.provider = {
-				name: providerOrName,
-				url
-			}
-		} else {
-			this.provider = providerOrName
-		}
+	public setProvider(provider: IProvider): this
+	public setProvider(name: string, url?: string): this
+	public setProvider(providerOrName: IProvider | string, url?: string): this {
+		this.data.provider =
+			typeof providerOrName === 'string'
+				? { name: providerOrName, url }
+				: providerOrName
 		return this
 	}
 
 	/**
-	 * Set Author information
-	 *
-	 * @param author Author
-	 * @returns this
+	 * Set the author shown above the title (name max 256 characters).
 	 */
-	public setAuthor(author: IAuthor): Embed
-	public setAuthor(name: string, url?: string, icon_url?: string): Embed
+	public setAuthor(author: IAuthor): this
+	public setAuthor(name: string, url?: string, icon_url?: string): this
 	public setAuthor(
 		authorOrName: IAuthor | string,
 		url?: string,
 		icon_url?: string
-	): Embed {
-		if (typeof authorOrName === 'string') {
-			this.assertAuthorName(authorOrName)
-			this.author = {
-				name: authorOrName,
-				url,
-				icon_url
-			}
-		} else {
-			if (authorOrName.name) this.assertAuthorName(authorOrName.name)
-			this.author = authorOrName
-		}
+	): this {
+		const author =
+			typeof authorOrName === 'string'
+				? { name: authorOrName, url, icon_url }
+				: authorOrName
+		assertMaxLength(
+			author.name,
+			Limits.authorName,
+			'author.name',
+			'Author name'
+		)
+		this.data.author = author
 		return this
 	}
 
 	/**
-	 * Set Field information
-	 * Maximum 25 fields
-	 *
-	 * @param field Field
-	 * @returns this
+	 * Add a field (max 25 fields; name max 256, value max 1024 characters).
 	 */
-	public addField(field: IField): Embed
-	public addField(name: string, value: string, inline?: boolean): Embed
+	public addField(field: IField): this
+	public addField(name: string, value: string, inline?: boolean): this
 	public addField(
 		fieldOrName: IField | string,
 		value?: string,
 		inline = false
-	): Embed {
-		if (typeof this.fields === 'undefined') {
-			this.fields = []
-		}
-
-		if (this.fields.length >= 25) {
-			throw new ValidationError('Fields length exceeds 25', 'fields', 25)
-		}
-
-		if (typeof fieldOrName === 'string') {
-			this.assertFieldName(fieldOrName)
-			this.assertFieldValue(value)
-			const field: IField = { name: fieldOrName, value: value || '', inline }
-			this.fields.push(field)
-		} else {
-			this.assertFieldName(fieldOrName.name)
-			this.assertFieldValue(fieldOrName.value)
-			this.fields.push(fieldOrName)
-		}
-
-		return this
+	): this {
+		const field =
+			typeof fieldOrName === 'string'
+				? { name: fieldOrName, value: value ?? '', inline }
+				: fieldOrName
+		return this.addFields(field)
 	}
 
 	/**
-	 * Set bulk field information.
-	 * Maximum 25 fields
-	 *
-	 * @param fields Array<IFields>
-	 * @returns Embed
+	 * Add several fields at once.
 	 */
-	public setFields(fields: Array<IField>): Embed {
-		if (fields.length > 25)
-			throw new ValidationError('Fields length exceeds 25', 'fields', 25)
-
-		for (const field of fields) {
-			this.assertFieldName(field.name)
-			this.assertFieldValue(field.value)
-		}
-
-		this.fields = fields
-
+	public addFields(...fields: IField[]): this {
+		const current = this.data.fields ?? []
+		assertMaxCount(
+			current.length + fields.length,
+			Limits.embedFields,
+			'fields',
+			'fields'
+		)
+		for (const field of fields) assertField(field)
+		this.data.fields = [...current, ...fields]
 		return this
 	}
 
 	/**
-	 * Generate object based on input
-	 *
-	 * @returns IEmbed
+	 * Replace all fields.
+	 */
+	public setFields(fields: IField[]): this {
+		this.data.fields = []
+		return this.addFields(...fields)
+	}
+
+	/**
+	 * Get the plain embed object sent to Discord.
 	 */
 	public toObject(): IEmbed {
-		return {
-			title: this.title,
-			type: 'rich',
-			url: this.url,
-			description: this.description,
-			timestamp: this.timestamp,
-			color: this.color,
-			footer: this.footer,
-			image: this.image,
-			thumbnail: this.thumbnail,
-			video: this.video,
-			provider: this.provider,
-			author: this.author,
-			fields: this.fields
+		const embed: IEmbed = { type: 'rich' }
+		for (const [key, value] of Object.entries(this.data)) {
+			if (value !== undefined) (embed as Record<string, unknown>)[key] = value
 		}
+		if (this.data.fields) embed.fields = [...this.data.fields]
+		return embed
 	}
 
-	private assertFieldName(name: string): void {
-		if (name.length > 256) {
-			throw new ValidationError(
-				'Field name length exceeds 256 characters',
-				'field.name',
-				256,
-				name.length
-			)
-		}
+	/**
+	 * Called by `JSON.stringify`.
+	 */
+	public toJSON(): IEmbed {
+		return this.toObject()
 	}
+}
 
-	private assertFooterText(text: string): void {
-		if (text.length > 2048) {
-			throw new ValidationError(
-				'Footer text length exceeds 2048 characters',
-				'footer.text',
-				2048,
-				text.length
-			)
-		}
+function assertField(field: IField): void {
+	if (!field.name) {
+		throw new ValidationError('Field name is required', 'field.name')
 	}
-
-	private assertAuthorName(name: string): void {
-		if (name.length > 256) {
-			throw new ValidationError(
-				'Author name length exceeds 256 characters',
-				'author.name',
-				256,
-				name.length
-			)
-		}
+	if (!field.value) {
+		throw new ValidationError('Field value is required', 'field.value')
 	}
-
-	private assertFieldValue(value?: string): void {
-		if (value === undefined || value.length === 0) {
-			throw new ValidationError('Field value is required', 'field.value')
-		}
-		if (value.length > 1024) {
-			throw new ValidationError(
-				'Field value length exceeds 1024 characters',
-				'field.value',
-				1024,
-				value.length
-			)
-		}
-	}
+	assertMaxLength(field.name, Limits.fieldName, 'field.name', 'Field name')
+	assertMaxLength(field.value, Limits.fieldValue, 'field.value', 'Field value')
 }
