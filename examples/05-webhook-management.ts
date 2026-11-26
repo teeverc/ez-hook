@@ -18,7 +18,7 @@ async function _getWebhookInfo() {
 		if (error instanceof WebhookNotFoundError) {
 			console.error('Webhook not found - it may have been deleted')
 		} else if (error instanceof WebhookError) {
-			console.error(`Error: ${error.message} (Status: ${error.statusCode})`)
+			console.error(`Error: ${error.message} (Status: ${error.status})`)
 		}
 	}
 }
@@ -28,11 +28,11 @@ async function _modifyWebhook() {
 	const webhook = new Webhook(WEBHOOK_URL)
 
 	try {
-		const result = await webhook.modify({
+		const updated = await webhook.modify({
 			name: 'Updated Bot Name',
 			avatar: 'data:image/png;base64,...'
 		})
-		console.log('Webhook updated:', result)
+		console.log(`Webhook renamed to ${updated.name}`)
 	} catch (error) {
 		console.error('Failed to modify webhook:', error)
 	}
@@ -50,18 +50,17 @@ async function _validateAndOperate() {
 	}
 
 	const info = await webhook.get()
-	console.log(`Connected to webhook: ${JSON.stringify(info)}`)
+	console.log(
+		`Connected to webhook "${info.name}" in channel ${info.channel_id}`
+	)
 
-	webhook.setContent('Validation successful!')
-	await webhook.send()
+	await webhook.send('Validation successful!')
 }
 
 // Example 4: Check retry configuration
 function _checkRetryConfig() {
 	const webhook = new Webhook(WEBHOOK_URL, {
-		maxRetries: 5,
-		baseDelay: 1000,
-		maxDelay: 30000
+		retry: { maxRetries: 5, baseDelay: 1000, maxDelay: 30000 }
 	})
 
 	const config = webhook.getRetryConfig()

@@ -1,960 +1,266 @@
-# EZ-Hook Documentation
+# EZ-Hook API Reference
 
-## Table of Contents
-- [Overview](#overview)
-- [Installation](#installation)
-- [Core Classes](#core-classes)
-  - [Webhook](#webhook)
-  - [Embed](#embed)
-- [API Reference](#api-reference)
-  - [Webhook Class](#webhook-class)
-  - [Embed Class](#embed-class)
-  - [RetryConfig](#retryconfig)
-  - [RequestResult](#requestresult)
-  - [Request Options](#request-options)
-- [Examples](#examples)
-  - [Basic Webhook](#basic-webhook)
-  - [Rich Embeds](#rich-embeds)
-  - [Multiple Embeds](#multiple-embeds)
-  - [Advanced Usage](#advanced-usage)
-  - [Webhook Management](#webhook-management)
-- [Error Handling](#error-handling)
-  - [Auto Retry Behavior](#auto-retry-behavior)
-  - [Error Types](#error-types)
-  - [Common Errors](#common-errors)
-  - [Error Handling Patterns](#error-handling-patterns)
-- [Discord Limits](#discord-limits)
+- [Webhook](#webhook)
+  - [Constructor](#constructor)
+  - [Sending messages](#sending-messages)
+  - [Managing messages](#managing-messages)
+  - [Managing the webhook](#managing-the-webhook)
+  - [Builder methods](#builder-methods)
+- [Embed](#embed)
+- [Types](#types)
+- [Errors](#errors)
+- [Retries, timeouts and cancellation](#retries-timeouts-and-cancellation)
+- [Limits](#limits)
 - [Troubleshooting](#troubleshooting)
 
-## Overview
+## Webhook
 
-EZ-Hook is a zero-dependency TypeScript/JavaScript library for sending Discord webhooks. It's designed to be easy to use with a fluent builder pattern API and works in edge environments like Cloudflare Workers, Vercel, and Deno.
+### Constructor
 
-Key features:
-- Zero dependencies
-- TypeScript support
-- Automatic retry on rate limits and server errors
-- Configurable retry behavior
-- Fluent builder API
-- Validation against Discord's limits
-- Method overloads for flexible usage
-
-## Installation
-
-### NPM
-```bash
-npm i @teever/ez-hook
-yarn add @teever/ez-hook
-pnpm add @teever/ez-hook
-bun add @teever/ez-hook
+```ts
+new Webhook(webhookUrl: string, options?: WebhookOptions)
 ```
 
-### JSR
-```bash
-# JSR (recommended)
-npx jsr add @teever/ez-hook
-# or with yarn
-yarn dlx jsr add @teever/ez-hook
-# or with pnpm
-pnpm dlx jsr add @teever/ez-hook
-# or with bun
-bunx jsr add @teever/ez-hook
-# or with deno
-deno add @teever/ez-hook
+| Option | Type | Description |
+| --- | --- | --- |
+| `retry` | `Partial<RetryConfig>` | `{ maxRetries: 3, baseDelay: 1000, maxDelay: 60000 }` by default |
+| `timeoutMs` | `number` | Timeout per attempt. No timeout by default. |
+| `headers` | `HeadersInit` | Headers added to every request |
+| `username` | `string` | Default username override for every message |
+| `avatarUrl` | `string` | Default avatar override for every message |
+| `allowedMentions` | `IAllowedMentions` | Default allowed mentions, e.g. `{ parse: [] }` |
+
+Throws `ValidationError` if `webhookUrl` is not a valid http(s) URL. Query parameters already in the URL (such as `?thread_id=`) are kept.
+
+### Sending messages
+
+#### `send(message?, options?): Promise<IMessage>`
+
+Sends a message and returns the message Discord created.
+
+`message` can be a string (used as `content`) or a `WebhookMessage`:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `content` | `string` | Up to 2000 characters |
+| `embeds` | `Array<Embed \| IEmbed>` | Up to 10 |
+| `files` | `WebhookFile[]` | Up to 10, see [files](#webhookfile) |
+| `username` | `string` | Username override, up to 80 characters |
+| `avatarUrl` | `string` | Avatar override |
+| `tts` | `boolean` | Text to speech |
+| `allowedMentions` | `IAllowedMentions` | Who may be pinged |
+| `flags` | `number \| MessageFlagName[]` | `'SuppressEmbeds'`, `'SuppressNotifications'` |
+| `threadId` | `string` | Post into an existing thread |
+| `threadName` | `string` | Create a forum/media post with this name |
+| `appliedTags` | `string[]` | Tags for the new forum post |
+
+The final message is merged in this order: constructor defaults, then builder state, then `message`.
+
+`options` (`SendOptions`): `signal`, `headers`, `timeoutMs`, and `wait` (default `true`). With `wait: false` Discord doesn't return the message, `send` resolves to `void`, and some errors may not be reported.
+
+Throws `ValidationError` before sending if the message is empty or breaks a limit, and `WebhookError` (or a subclass) if the request fails.
+
+```ts
+const message = await hook.send({ content: 'Hi', flags: ['SuppressNotifications'] })
 ```
 
-## Core Classes
+#### `trySend(message?, options?): Promise<Result<IMessage>>`
 
-### Webhook
+Same as `send`, but it never throws:
 
-The `Webhook` class is used to create and send webhook messages to Discord. It handles the webhook URL, content, username override, avatar override, and embeds.
-
-### Embed
-
-The `Embed` class is used to create rich embed content for Discord webhooks. It allows you to set title, description, color, fields, images, and more.
-
-## API Reference
-
-### Webhook Class
-
-#### Constructor
-
-```typescript
-constructor(webhookUrl: string, retryConfig?: Partial<RetryConfig>)
+```ts
+type Result<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: EzHookError }
 ```
 
-Creates a new webhook instance.
+### Managing messages
 
-- `webhookUrl`: The Discord webhook URL
-- `retryConfig` (optional): Configuration for the retry behavior
+Only messages sent by this webhook can be fetched, edited or deleted. For messages inside a thread, pass the `threadId`.
 
-```typescript
-// Example
-const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
+#### `getMessage(messageId, options?: MessageOptions): Promise<IMessage>`
+
+#### `editMessage(messageId, edit: string | WebhookMessageEdit, options?): Promise<IMessage>`
+
+`WebhookMessageEdit` accepts `content`, `embeds`, `files`, `allowedMentions`, `flags` and `threadId`. Only the fields you pass change. Passing `files` replaces the message's attachments. Constructor defaults are not applied to edits.
+
+```ts
+await hook.editMessage(message.id, { embeds: [new Embed().setTitle('Done')] })
 ```
 
-#### Methods
+#### `deleteMessage(messageId, options?: MessageOptions): Promise<void>`
 
-##### `setUsername(username: string): Webhook`
+`MessageOptions` is `RequestOptions` plus `threadId`.
 
-Sets the username override for the webhook.
+### Managing the webhook
 
-- `username`: The username to display
-- Returns: The webhook instance for chaining
+#### `get(options?): Promise<IWebhookResponse>`
 
-```typescript
-webhook.setUsername('Bot Name');
+Fetches the webhook's name, avatar, channel and guild.
+
+#### `modify(changes: IWebhookParameter, options?): Promise<IWebhookResponse>`
+
+Changes the webhook's default `name` or `avatar`. The avatar must be an image data URI, or `null` to remove it.
+
+#### `deleteWebhook(options?): Promise<void>`
+
+Permanently deletes the webhook. The URL stops working afterwards.
+
+#### `isValid(options?): Promise<boolean>`
+
+Returns `true` if `get()` succeeds. Never throws.
+
+### Builder methods
+
+Every setter returns `this`. They set a draft that `send()` uses when called without a message, or that a passed message overrides.
+
+| Method | Notes |
+| --- | --- |
+| `setContent(content)` | Throws if longer than 2000 characters |
+| `setUsername(username)` | Throws if longer than 80 characters |
+| `setAvatarUrl(url)` | |
+| `setTTS(flag)` | |
+| `addEmbed(embed)` | `Embed` or `IEmbed`, max 10. Builders are serialized when sending. |
+| `setEmbeds(embeds)` | Replaces all embeds |
+| `setFile(file)` | Replaces all files with this one |
+| `addFile(file)` | Max 10 |
+| `setAllowedMentions(mentions)` | |
+| `setFlags(flags)` | |
+| `setThreadId(id)` / `setThreadName(name)` | |
+| `clear()` | Resets the draft. Constructor defaults are kept. |
+| `validate()` | Throws `ValidationError` if the draft would be rejected |
+| `toObject()` | The JSON body `send()` would post, without files |
+| `getRetryConfig()` | The resolved retry configuration |
+
+The draft is **not** cleared after sending.
+
+## Embed
+
+```ts
+new Embed(data?: IEmbed)
+Embed.from(data: IEmbed)
 ```
 
-##### `setAvatarUrl(url: string): Webhook`
+| Method | Notes |
+| --- | --- |
+| `setTitle(title)` | Max 256 characters |
+| `setDescription(text)` | Max 4096 characters |
+| `setUrl(url)` | Makes the title a link. `setURL` is a deprecated alias. |
+| `setColor(color)` | `0x5865f2`, `'#5865f2'` or `'5865f2'` |
+| `setTimestamp(date?)` | `Date`, epoch ms or date string. Defaults to now. |
+| `setAuthor(name, url?, iconUrl?)` / `setAuthor(IAuthor)` | Name max 256 characters |
+| `setFooter(text, iconUrl?)` / `setFooter(IFooter)` | Text max 2048 characters |
+| `setImage(url, height?, width?)` / `setImage(IImage)` | |
+| `setThumbnail(url, height?, width?)` / `setThumbnail(IThumbnail)` | |
+| `addField(name, value, inline?)` / `addField(IField)` | Max 25 fields. Name max 256, value 1024, neither may be empty. |
+| `addFields(...fields)` | |
+| `setFields(fields)` | Replaces all fields |
+| `setVideo(...)` / `setProvider(...)` | Discord ignores these for webhooks |
+| `toObject()` / `toJSON()` | The plain `IEmbed` object |
 
-Sets the avatar URL override for the webhook.
+To show an uploaded file in an embed, reference it with `attachment://filename`:
 
-- `url`: The URL of the avatar image
-- Returns: The webhook instance for chaining
-
-```typescript
-webhook.setAvatarUrl('https://example.com/avatar.png');
+```ts
+await hook.send({
+  embeds: [new Embed().setImage('attachment://chart.png')],
+  files: [{ filename: 'chart.png', data: png, contentType: 'image/png' }],
+})
 ```
 
-##### `setTTS(flag: boolean): Webhook`
+## Types
 
-Sets whether the message should be read as text-to-speech.
+All types are exported from the package root.
 
-- `flag`: Boolean flag for TTS
-- Returns: The webhook instance for chaining
+### `WebhookFile`
 
-```typescript
-webhook.setTTS(true);
-```
+```ts
+type WebhookFile = string | FileAttachment // a plain string is sent as file.txt
 
-##### `setContent(content: string): Webhook`
-
-Sets the content of the webhook message.
-
-- `content`: The message content (max 2000 characters)
-- Returns: The webhook instance for chaining
-- Throws: Error if content exceeds 2000 characters
-
-```typescript
-webhook.setContent('Hello, world!');
-```
-
-##### `addEmbed(embed: Embed): Webhook`
-
-Adds a rich embed to the webhook message.
-
-- `embed`: An Embed instance
-- Returns: The webhook instance for chaining
-- Throws: Error if more than 10 embeds are added
-
-```typescript
-const embed = new Embed().setTitle('Title').setDescription('Description');
-webhook.addEmbed(embed);
-```
-
-##### `setFile(file: FileAttachment | string): Webhook`
-
-Sets a file to be sent with the webhook.
-
-- `file`: File content as a string, Blob, ArrayBuffer, typed array, or attachment object
-- Returns: The webhook instance for chaining
-
-```typescript
-webhook.setFile('file contents');
-webhook.setFile({
-  filename: 'report.txt',
-  data: new Uint8Array([1, 2, 3]),
-  contentType: 'text/plain'
-});
-webhook.setFile({
-  filename: 'report.txt',
-  data: 'ZmlsZSBjb250ZW50cw==',
-  encoding: 'base64'
-});
-```
-
-##### `validate(): void`
-
-Validates the webhook contents against Discord's limits.
-
-- Throws: Various errors if validation fails
-
-```typescript
-webhook.validate();
-```
-
-##### `send(): Promise<boolean>`
-
-Sends the webhook to Discord.
-
-- Returns: Promise resolving to a boolean indicating success/failure
-
-```typescript
-const success = await webhook.send();
-```
-
-##### `modify(options: IWebhookParameter): Promise<boolean>`
-
-Modifies the webhook's properties on Discord.
-
-- `options`: Parameters to modify
-- Returns: Promise resolving to a boolean indicating success/failure
-
-```typescript
-const success = await webhook.modify({
-  name: 'New Webhook Name',
-  avatar: 'base64_encoded_avatar_data'
-});
-```
-
-##### `get(): Promise<boolean>`
-
-Gets the webhook information from Discord.
-
-- Returns: Promise resolving to a boolean indicating success/failure
-
-```typescript
-const webhookInfo = await webhook.get();
-```
-
-##### `isValid(): Promise<boolean>`
-
-Checks if the webhook URL is valid.
-
-- Returns: Promise resolving to a boolean indicating validity
-
-```typescript
-const isValid = await webhook.isValid();
-```
-
-##### `toObject(): IWebhook`
-
-Converts the webhook to a plain object.
-
-- Returns: The webhook as a plain object
-
-```typescript
-const webhookObject = webhook.toObject();
-```
-
-##### `getRetryConfig(): RetryConfig`
-
-Gets the current retry configuration.
-
-- Returns: The current RetryConfig object
-
-```typescript
-const retryConfig = webhook.getRetryConfig();
-```
-
-### Embed Class
-
-#### Constructor
-
-The Embed class constructor takes no parameters.
-
-```typescript
-// Example
-const embed = new Embed();
-```
-
-#### Methods
-
-##### `setTitle(title: string): Embed`
-
-Sets the title of the embed.
-
-- `title`: The title text (max 256 characters)
-- Returns: The embed instance for chaining
-- Throws: Error if title exceeds 256 characters
-
-```typescript
-embed.setTitle('Embed Title');
-```
-
-##### `setURL(url: string): Embed`
-
-Sets the URL of the embed.
-
-- `url`: The URL
-- Returns: The embed instance for chaining
-
-```typescript
-embed.setURL('https://example.com');
-```
-
-##### `setDescription(description: string): Embed`
-
-Sets the description of the embed.
-
-- `description`: The description text (max 4096 characters)
-- Returns: The embed instance for chaining
-- Throws: Error if description exceeds 4096 characters
-
-```typescript
-embed.setDescription('This is a description of the embed');
-```
-
-##### `setTimestamp(date?: Date): Embed`
-
-Sets the timestamp of the embed.
-
-- `date` (optional): A Date object (defaults to current time)
-- Returns: The embed instance for chaining
-
-```typescript
-embed.setTimestamp(); // Current time
-embed.setTimestamp(new Date('2023-01-01')); // Specific time
-```
-
-##### `setColor(color: number | string): Embed`
-
-Sets the color of the embed.
-
-- `color`: A color as a number or hex string (e.g., '#FF0000' or 0xFF0000)
-- Returns: The embed instance for chaining
-
-```typescript
-embed.setColor('#FF0000'); // Hex string
-embed.setColor(0xFF0000); // Number
-```
-
-##### `setFooter(footer: IFooter): Embed`
-##### `setFooter(text: string, icon_url?: string | IAttachment, proxy_icon_url?: string): Embed`
-
-Sets the footer of the embed.
-
-- Overload 1: Takes an IFooter object
-- Overload 2: Takes text and optional icon URL
-- Returns: The embed instance for chaining
-
-```typescript
-// Object format
-embed.setFooter({
-  text: 'Footer text',
-  icon_url: 'https://example.com/icon.png'
-});
-
-// Parameters format
-embed.setFooter('Footer text', 'https://example.com/icon.png');
-```
-
-##### `setImage(image: IImage): Embed`
-##### `setImage(url: string, height?: number, width?: number): Embed`
-
-Sets the image of the embed.
-
-- Overload 1: Takes an IImage object
-- Overload 2: Takes URL and optional dimensions
-- Returns: The embed instance for chaining
-
-```typescript
-// Object format
-embed.setImage({
-  url: 'https://example.com/image.png',
-  height: 300,
-  width: 400
-});
-
-// Parameters format
-embed.setImage('https://example.com/image.png', 300, 400);
-```
-
-##### `setThumbnail(thumbnail: IThumbnail): Embed`
-##### `setThumbnail(url: string, height?: number, width?: number): Embed`
-
-Sets the thumbnail of the embed.
-
-- Overload 1: Takes an IThumbnail object
-- Overload 2: Takes URL and optional dimensions
-- Returns: The embed instance for chaining
-
-```typescript
-// Object format
-embed.setThumbnail({
-  url: 'https://example.com/thumbnail.png',
-  height: 100,
-  width: 100
-});
-
-// Parameters format
-embed.setThumbnail('https://example.com/thumbnail.png', 100, 100);
-```
-
-##### `setVideo(video: IVideo): Embed`
-##### `setVideo(url: string, height?: number, width?: number): Embed`
-
-Sets the video of the embed.
-
-- Overload 1: Takes an IVideo object
-- Overload 2: Takes URL and optional dimensions
-- Returns: The embed instance for chaining
-
-```typescript
-// Object format
-embed.setVideo({
-  url: 'https://example.com/video.mp4',
-  height: 480,
-  width: 854
-});
-
-// Parameters format
-embed.setVideo('https://example.com/video.mp4', 480, 854);
-```
-
-##### `setProvider(provider: IProvider): Embed`
-##### `setProvider(name: string, url?: string): Embed`
-
-Sets the provider of the embed.
-
-- Overload 1: Takes an IProvider object
-- Overload 2: Takes name and optional URL
-- Returns: The embed instance for chaining
-
-```typescript
-// Object format
-embed.setProvider({
-  name: 'Provider Name',
-  url: 'https://example.com'
-});
-
-// Parameters format
-embed.setProvider('Provider Name', 'https://example.com');
-```
-
-##### `setAuthor(author: IAuthor): Embed`
-##### `setAuthor(name: string, url?: string, icon_url?: string): Embed`
-
-Sets the author of the embed.
-
-- Overload 1: Takes an IAuthor object
-- Overload 2: Takes name, URL, and icon URL
-- Returns: The embed instance for chaining
-
-```typescript
-// Object format
-embed.setAuthor({
-  name: 'Author Name',
-  url: 'https://example.com/author',
-  icon_url: 'https://example.com/author-icon.png'
-});
-
-// Parameters format
-embed.setAuthor('Author Name', 'https://example.com/author', 'https://example.com/author-icon.png');
-```
-
-##### `addField(field: IField): Embed`
-##### `addField(name: string, value: string, inline?: boolean): Embed`
-
-Adds a field to the embed.
-
-- Overload 1: Takes an IField object
-- Overload 2: Takes name, value, and optional inline flag
-- Returns: The embed instance for chaining
-- Throws: Error if adding more than 25 fields, if name exceeds 256 characters, if value is empty, or if value exceeds 1024 characters
-
-```typescript
-// Object format
-embed.addField({
-  name: 'Field Name',
-  value: 'Field Value',
-  inline: true
-});
-
-// Parameters format
-embed.addField('Field Name', 'Field Value', true);
-```
-
-##### `setFields(fields: Array<IField>): Embed`
-
-Sets multiple fields at once.
-
-- `fields`: Array of IField objects
-- Returns: The embed instance for chaining
-- Throws: Error if more than 25 fields are provided
-
-```typescript
-embed.setFields([
-  { name: 'Field 1', value: 'Value 1', inline: true },
-  { name: 'Field 2', value: 'Value 2', inline: true }
-]);
-```
-
-##### `toObject(): IEmbed`
-
-Converts the embed to a plain object.
-
-- Returns: The embed as a plain object
-
-```typescript
-const embedObject = embed.toObject();
-```
-
-### RetryConfig
-
-Interface for configuring retry behavior.
-
-```typescript
-interface RetryConfig {
-  /**
-   * Maximum number of retry attempts
-   * Default: 3
-   */
-  maxRetries: number;
-  
-  /**
-   * Base delay in milliseconds between retries
-   * Default: 1000 (1 second)
-   */
-  baseDelay: number;
-  
-  /**
-   * Maximum delay in milliseconds between retries
-   * Default: 60000 (60 seconds)
-   */
-  maxDelay: number;
+interface FileAttachment {
+  filename: string
+  data: string | Blob | ArrayBuffer | ArrayBufferView
+  encoding?: 'text' | 'base64' // decode base64 string data before upload
+  contentType?: string
+  description?: string         // alt text, max 1024 characters
 }
 ```
 
-### RequestResult
+### `IAllowedMentions`
 
-Return type for `send()`, `modify()`, and `get()` methods.
-
-```typescript
-interface RequestResult {
-  /** Whether the request succeeded (2xx status) */
-  ok: boolean;
-  
-  /** HTTP status code (0 on network failure) */
-  status: number;
-  
-  /** Milliseconds until retry, if provided by Discord */
-  retryAfter?: number;
-  
-  /** Raw response body text */
-  bodyText?: string;
-  
-  /** Error message for non-OK responses */
-  error?: string;
+```ts
+interface IAllowedMentions {
+  parse?: Array<'roles' | 'users' | 'everyone'>
+  roles?: string[]
+  users?: string[]
+  replied_user?: boolean
 }
 ```
 
-Example usage:
+### `MessageFlags`
 
-```typescript
-const result = await webhook.send();
-
-if (result.ok) {
-  console.log('Sent successfully');
-} else {
-  console.error(`Failed: ${result.error} (status: ${result.status})`);
-  if (result.retryAfter) {
-    console.log(`Retry after ${result.retryAfter}ms`);
-  }
-}
+```ts
+MessageFlags.SuppressEmbeds        // 1 << 2
+MessageFlags.SuppressNotifications // 1 << 12
 ```
 
-### Request Options
+Other exported types: `IMessage`, `IEmbed`, `IField`, `IAuthor`, `IFooter`, `IImage`, `IThumbnail`, `IVideo`, `IProvider`, `IAttachment`, `IUser`, `IWebhook`, `IWebhookParameter`, `IWebhookResponse`, `WebhookMessage`, `WebhookMessageEdit`, `WebhookOptions`, `SendOptions`, `MessageOptions`, `RequestOptions`, `RetryConfig`, `Result`.
 
-The `send()`, `modify()`, and `get()` methods accept an optional options object:
-
-```typescript
-interface RequestOptions {
-  /** AbortSignal for cancelling the request */
-  signal?: AbortSignal;
-  
-  /** Custom headers to include in the request */
-  headers?: Record<string, string>;
-  
-  /** Timeout in milliseconds (auto-aborts if exceeded) */
-  timeoutMs?: number;
-}
-```
-
-Example usage:
-
-```typescript
-// With timeout
-const result = await webhook.send({ timeoutMs: 5000 });
-
-// With abort controller
-const controller = new AbortController();
-setTimeout(() => controller.abort(), 10000);
-const result = await webhook.send({ signal: controller.signal });
-
-// With custom headers
-const result = await webhook.send({
-  headers: { 'X-Custom-Header': 'value' }
-});
-```
-
-## Examples
-
-> See the [examples](./examples) directory for runnable TypeScript examples covering all features.
-
-### Basic Webhook
-
-```typescript
-import { Webhook } from '@teever/ez-hook';
-
-async function sendBasicWebhook() {
-  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
-  
-  // Set basic properties
-  webhook
-    .setUsername('Notification Bot')
-    .setAvatarUrl('https://example.com/bot-avatar.png')
-    .setContent('Hello from EZ-Hook!');
-  
-  // Send the webhook
-  const success = await webhook.send();
-  
-  console.log(success ? 'Webhook sent successfully!' : 'Failed to send webhook');
-}
-
-sendBasicWebhook();
-```
-
-### Rich Embeds
-
-```typescript
-import { Webhook, Embed } from '@teever/ez-hook';
-
-async function sendRichEmbed() {
-  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
-  
-  // Create an embed
-  const embed = new Embed()
-    .setTitle('Server Status')
-    .setDescription('Current server status and statistics')
-    .setColor('#00FF00')
-    .setTimestamp()
-    .setFooter('Powered by EZ-Hook', 'https://example.com/logo.png')
-    .addField('CPU', '34%', true)
-    .addField('RAM', '45%', true)
-    .addField('Disk', '67%', true)
-    .addField('Uptime', '3 days, 7 hours', false)
-    .setThumbnail('https://example.com/server-icon.png');
-  
-  // Add the embed to the webhook
-  webhook.addEmbed(embed);
-  
-  // Send the webhook
-  const success = await webhook.send();
-  
-  console.log(success ? 'Rich embed sent successfully!' : 'Failed to send rich embed');
-}
-
-sendRichEmbed();
-```
-
-### Multiple Embeds
-
-```typescript
-import { Embed, Webhook } from '@teever/ez-hook';
-
-async function sendMultipleEmbeds() {
-  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
-
-  // Create multiple embeds (up to 10 per message)
-  const embed1 = new Embed()
-    .setTitle('First Embed')
-    .setDescription('This is the first embed')
-    .setColor('#FF0000');
-
-  const embed2 = new Embed()
-    .setTitle('Second Embed')
-    .setDescription('This is the second embed')
-    .setColor('#00FF00');
-
-  const embed3 = new Embed()
-    .setTitle('Third Embed')
-    .setDescription('This is the third embed')
-    .setColor('#0000FF');
-
-  // Chain multiple embeds
-  webhook
-    .addEmbed(embed1)
-    .addEmbed(embed2)
-    .addEmbed(embed3);
-
-  await webhook.send();
-}
-
-sendMultipleEmbeds();
-```
-
-### Advanced Usage
-
-```typescript
-import { Webhook, Embed } from '@teever/ez-hook';
-
-async function sendAdvancedWebhook() {
-  // Custom retry configuration
-  const retryConfig = {
-    maxRetries: 5,     // Try up to 5 times
-    baseDelay: 500,    // Start with 500ms delay
-    maxDelay: 10000    // Max delay of 10 seconds
-  };
-  
-  const webhook = new Webhook(
-    'https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz',
-    retryConfig
-  );
-  
-  // Set webhook properties
-  webhook
-    .setUsername('Status Bot')
-    .setContent('Weekly system report');
-  
-  // First embed - System status
-  const statusEmbed = new Embed()
-    .setTitle('System Status')
-    .setColor('#00FF00')
-    .setDescription('All systems operational')
-    .addField('Uptime', '99.99%', true)
-    .addField('Response Time', '124ms', true);
-  
-  // Second embed - Incident report
-  const incidentEmbed = new Embed()
-    .setTitle('Recent Incidents')
-    .setColor('#FFA500')
-    .setDescription('Minor incidents in the past week')
-    .addField('Database Slowdown', 'Resolved after 15 minutes', false)
-    .setTimestamp(new Date('2023-04-01T14:30:00Z'));
-  
-  // Add embeds to webhook
-  webhook
-    .addEmbed(statusEmbed)
-    .addEmbed(incidentEmbed);
-  
-  // Check if webhook is valid before sending
-  const isValid = await webhook.isValid();
-  
-  if (isValid) {
-    // Send the webhook
-    const success = await webhook.send();
-    console.log(success ? 'Advanced webhook sent successfully!' : 'Failed to send advanced webhook');
-  } else {
-    console.error('Invalid webhook URL');
-  }
-}
-
-sendAdvancedWebhook();
-```
-
-### Webhook Management
-
-```typescript
-import { Webhook, WebhookNotFoundError, WebhookError } from '@teever/ez-hook';
-
-async function manageWebhook() {
-  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
-
-  // Check if webhook is valid
-  const isValid = await webhook.isValid();
-  if (!isValid) {
-    console.error('Webhook URL is invalid!');
-    return;
-  }
-
-  // Get webhook information
-  try {
-    const info = await webhook.get();
-    console.log('Webhook info:', info);
-  } catch (error) {
-    if (error instanceof WebhookNotFoundError) {
-      console.error('Webhook not found');
-    }
-  }
-
-  // Modify webhook settings
-  try {
-    await webhook.modify({
-      name: 'Updated Bot Name'
-    });
-  } catch (error) {
-    console.error('Failed to modify webhook:', error);
-  }
-}
-
-manageWebhook();
-```
-
-## Error Handling
-
-EZ-Hook provides typed error classes for precise error handling and validation against Discord's limits.
-
-### Auto Retry Behavior
-
-EZ-Hook automatically retries failed requests with exponential backoff and jitter:
-
-- **Retried status codes**: `429` (rate limit), `5xx` (server errors), and network failures
-- **Exponential backoff**: Each retry doubles the delay (up to `maxDelay`)
-- **Jitter**: ±20% random variation to prevent thundering herd
-- **Rate limit handling**: Uses Discord's `retry-after` header when available
-
-```typescript
-// Default retry configuration
-const defaults = {
-  maxRetries: 3,      // Up to 3 retry attempts
-  baseDelay: 1000,    // Start with 1 second delay
-  maxDelay: 60000     // Cap at 60 seconds
-};
-
-// Custom configuration for high-reliability scenarios
-const webhook = new Webhook(url, {
-  maxRetries: 5,
-  baseDelay: 500,
-  maxDelay: 30000
-});
-
-// Disable retries entirely
-const webhook = new Webhook(url, { maxRetries: 0 });
-```
-
-### Error Types
-
-EZ-Hook exports a hierarchy of error classes:
+## Errors
 
 ```
-EzHookError (base class)
-├── ValidationError
-└── WebhookError
-    ├── RateLimitError
-    └── WebhookNotFoundError
+EzHookError
+├── ValidationError         field, maxLength, actualLength
+└── WebhookError            status (statusCode), retryAfter, code, body
+    ├── WebhookNotFoundError    404
+    ├── RateLimitError          429
+    └── NetworkError            status 0, cause
+        ├── TimeoutError
+        └── RequestAbortedError
 ```
 
-| Error Class | Description | Properties |
-|-------------|-------------|------------|
-| `EzHookError` | Base class for all ez-hook errors | `message`, `name` |
-| `ValidationError` | Input validation failed | `field`, `maxLength`, `actualLength` |
-| `WebhookError` | HTTP request failed | `statusCode`, `retryAfter` |
-| `RateLimitError` | Rate limited (429) | `retryAfter` (ms until retry) |
-| `WebhookNotFoundError` | Webhook URL invalid/deleted (404) | `statusCode` |
+- `ValidationError.field` is a path such as `content`, `embeds[2].fields[0].value` or `files[1].description`.
+- `WebhookError.code` is Discord's JSON error code, such as `50035` (Invalid Form Body) or `10015` (Unknown Webhook).
+- `WebhookError.message` includes Discord's field-level details, for example `Invalid Form Body (code 50035): embeds.0.description: Must be 4096 or fewer in length.`
+- `NetworkError.cause` holds the original `fetch` error.
 
-### Common Errors
+## Retries, timeouts and cancellation
 
-| Error Message | Cause | Solution |
-|---------------|-------|----------|
-| `Content length exceeds 2000 characters` | Message content is too long | Reduce content length or split into multiple messages |
-| `Embeds length exceeds 10` | Too many embeds added | Remove embeds or split into multiple messages |
-| `Fields length exceeds 25` | Too many fields in an embed | Remove fields or split across multiple embeds |
-| `Field name length exceeds 256 characters` | Field name too long | Shorten field name |
-| `Field value length exceeds 1024 characters` | Field value too long | Shorten field value |
-| `Field value is required` | Empty field value | Add content to the field value |
-| `Title length exceeds 256 characters` | Embed title too long | Shorten embed title |
-| `Description length exceeds 4096 characters` | Embed description too long | Shorten embed description |
+| Response | Behaviour |
+| --- | --- |
+| 429 | Waits for Discord's `retry_after` (from the body, or the `Retry-After` header), then retries. Throws `RateLimitError` if retries run out or the wait would be longer than `maxDelay`. |
+| 5xx | Exponential backoff (`baseDelay * 2^n`, ±10% jitter, capped at `maxDelay`), then retries |
+| Network error / timeout | Retried for GET, PATCH and DELETE. **Not** retried for `send()`, to avoid duplicate messages. |
+| Other 4xx | Thrown immediately |
 
-### Error Handling Patterns
+`timeoutMs` applies to each attempt. `signal` cancels the whole operation, including any backoff delay, and throws `RequestAbortedError`.
 
-```typescript
-import {
-  Webhook,
-  Embed,
-  ValidationError,
-  RateLimitError,
-  WebhookError,
-  WebhookNotFoundError
-} from '@teever/ez-hook';
+## Limits
 
-async function sendWithErrorHandling() {
-  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
+`Limits` is exported:
 
-  try {
-    webhook.setContent('Hello!');
-    await webhook.send();
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      // Handle validation errors with detailed info
-      console.error(`Validation failed for "${error.field}": ${error.message}`);
-      if (error.maxLength) {
-        console.error(`Max: ${error.maxLength}, Actual: ${error.actualLength}`);
-      }
-    } else if (error instanceof RateLimitError) {
-      // Handle rate limits with retry info
-      console.error(`Rate limited! Retry after ${error.retryAfter}ms`);
-    } else if (error instanceof WebhookNotFoundError) {
-      // Handle invalid/deleted webhooks
-      console.error('Webhook URL is invalid or has been deleted');
-    } else if (error instanceof WebhookError) {
-      // Handle other HTTP errors
-      console.error(`HTTP error ${error.statusCode}: ${error.message}`);
-    } else {
-      throw error;
-    }
-  }
-}
-
-// Rate limit handling with retry
-async function sendWithRetry() {
-  const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz');
-  webhook.setContent('Message');
-
-  const maxAttempts = 3;
-  let attempt = 0;
-
-  while (attempt < maxAttempts) {
-    try {
-      await webhook.send();
-      break;
-    } catch (error) {
-      if (error instanceof RateLimitError && error.retryAfter) {
-        attempt++;
-        console.log(`Rate limited, waiting ${error.retryAfter}ms`);
-        await new Promise(resolve => setTimeout(resolve, error.retryAfter));
-      } else {
-        throw error;
-      }
-    }
-  }
-}
+```ts
+Limits.content          // 2000
+Limits.username         // 80
+Limits.threadName       // 100
+Limits.embeds           // 10
+Limits.files            // 10
+Limits.embedTitle       // 256
+Limits.embedDescription // 4096
+Limits.embedFields      // 25
+Limits.fieldName        // 256
+Limits.fieldValue       // 1024
+Limits.footerText       // 2048
+Limits.authorName       // 256
+Limits.embedTotal       // 6000 (title + description + fields + footer + author, across all embeds)
+Limits.fileDescription  // 1024
 ```
 
-## Discord Limits
-
-EZ-Hook validates against Discord's webhook limits:
-
-- **Content Limits**:
-  - Message content: 2000 characters
-  - Embed title: 256 characters
-  - Embed description: 4096 characters
-  - Embed fields: Up to 25 fields
-  - Embed field name: 256 characters
-  - Embed field value: 1024 characters
-  - Total embeds per message: 10
-
-- **Rate Limits**:
-  - Default rate limit: 30 requests per minute per webhook
-  - EZ-Hook automatically handles rate limits with configurable retry behavior
+Discord also limits the total upload size per message, depending on the server's boost level. ez-hook does not check that limit. Discord rejects oversized uploads with a 413 `WebhookError`.
 
 ## Troubleshooting
 
-### Webhook Not Sending
-
-1. Check if the webhook URL is valid using `webhook.isValid()`
-2. Ensure you're calling `await webhook.send()` and handling the Promise
-3. Make sure your content and embeds don't exceed Discord's limits
-
-### Rate Limiting Issues
-
-EZ-Hook automatically retries on rate limits, but if you're experiencing persistent issues:
-
-1. Reduce the frequency of webhook sends
-2. Customize the retry behavior:
-
-```typescript
-const webhook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz', {
-  maxRetries: 5,    // More retries
-  baseDelay: 2000,  // Longer delay between retries
-  maxDelay: 120000  // Longer maximum delay
-});
-```
-
-### Webhook Not Appearing as Expected
-
-1. Check that you've set all required properties
-2. Ensure URLs for images, thumbnails, and avatars are publicly accessible
-3. Verify that your webhook hasn't been deleted or regenerated on Discord
-4. Make sure you're not exceeding Discord's limits
+- **`WebhookNotFoundError`**: the webhook was deleted, or the URL or token is wrong. Copy the URL again from the channel's integration settings.
+- **`Invalid Form Body (code 50035)`**: the message has the details, for example an invalid URL in an embed image.
+- **Mentions don't ping**: check `allowedMentions`. `{ parse: [] }` disables all pings.
+- **Embeds pile up across sends**: builder state is kept after `send()`. Use `hook.clear()`, or pass the message to `send()`.
+- **Can't edit a message in a thread**: pass `threadId` to `editMessage` / `deleteMessage` / `getMessage`.

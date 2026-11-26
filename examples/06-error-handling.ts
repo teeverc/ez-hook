@@ -5,6 +5,7 @@
 import {
 	Embed,
 	RateLimitError,
+	TimeoutError,
 	ValidationError,
 	Webhook,
 	WebhookError,
@@ -19,8 +20,7 @@ async function _comprehensiveErrorHandling() {
 	const webhook = new Webhook(WEBHOOK_URL)
 
 	try {
-		webhook.setContent('Hello!')
-		await webhook.send()
+		await webhook.send('Hello!')
 	} catch (error) {
 		if (error instanceof ValidationError) {
 			console.error(
@@ -33,8 +33,13 @@ async function _comprehensiveErrorHandling() {
 			console.error(`Rate limited! Retry after ${error.retryAfter}ms`)
 		} else if (error instanceof WebhookNotFoundError) {
 			console.error('Webhook URL is invalid or has been deleted')
+		} else if (error instanceof TimeoutError) {
+			console.error('Discord did not answer in time')
 		} else if (error instanceof WebhookError) {
-			console.error(`HTTP error ${error.statusCode}: ${error.message}`)
+			// error.status is 0 for network errors
+			console.error(
+				`HTTP error ${error.status} (code ${error.code}): ${error.message}`
+			)
 		} else {
 			throw error
 		}
@@ -127,8 +132,7 @@ async function _gracefulDegradation() {
 
 	const sendNotification = async (message: string): Promise<boolean> => {
 		try {
-			webhook.setContent(message)
-			await webhook.send()
+			await webhook.send(message)
 			return true
 		} catch (error) {
 			if (error instanceof WebhookNotFoundError) {

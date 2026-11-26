@@ -7,1492 +7,921 @@ import {
 	spyOn,
 	test
 } from 'bun:test'
-import {
-	RateLimitError,
-	ValidationError,
-	WebhookError
-} from '../classes/Errors.js'
-import type { RequestClient } from '../classes/RequestClient.js'
 import * as RequestClientModule from '../classes/RequestClient.js'
-import { Embed, Webhook } from '../index.js'
+import {
+	Embed,
+	EzHookError,
+	MessageFlags,
+	NetworkError,
+	RateLimitError,
+	RequestAbortedError,
+	TimeoutError,
+	ValidationError,
+	Webhook,
+	WebhookError,
+	WebhookNotFoundError
+} from '../index.js'
 
-// Use a mock webhook URL for testing
-const TEST_WEBHOOK_URL =
-	'https://discord.com/api/webhooks/123456789/test-webhook-token'
+const URL_BASE = 'https://discord.com/api/webhooks/123456789/test-token'
 
-// Mock fetch globally
-let mockFetch: ReturnType<typeof mock>
-let delaySpyOn: ReturnType<typeof spyOn>
+const MESSAGE = {
+	id: '111',
+	channel_id: '222',
+	type: 0,
+	content: 'Hello',
+	timestamp: '2026-01-01T00:00:00.000Z',
+	edited_timestamp: null,
+	tts: false,
+	mention_everyone: false,
+	embeds: [],
+	attachments: [],
+	author: { id: '123456789', username: 'Hook', avatar: null, bot: true },
+	pinned: false
+}
+
+type FetchCall = { url: URL; init: RequestInit }
+
+let calls: FetchCall[]
+let responses: Array<
+	Response | Error | ((init: RequestInit) => Promise<Response>)
+>
+let delaySpy: ReturnType<typeof spyOn>
+
+const json = (
+	body: unknown,
+	status = 200,
+	headers: Record<string, string> = {}
+) =>
+	new Response(JSON.stringify(body), {
+		status,
+		headers: { 'content-type': 'application/json', ...headers }
+	})
 
 beforeEach(() => {
-	// Reset and setup fetch mock before each test
-	mockFetch = mock(() => Promise.resolve(new Response('', { status: 204 })))
-	// oxlint-disable-next-line no-explicit-any -- Required for global fetch mocking
-	global.fetch = mockFetch as any
-
-	// Spy on and mock the delay function to make retry tests instant
-	delaySpyOn = spyOn(RequestClientModule, 'delay').mockImplementation(() =>
+	calls = []
+	responses = []
+	globalThis.fetch = mock(
+		async (input: string | URL | Request, init: RequestInit = {}) => {
+			calls.push({ url: new URL(String(input)), init })
+			const next = responses.shift() ?? json(MESSAGE)
+			if (next instanceof Error) throw next
+			if (typeof next === 'function') return next(init)
+			return next
+		}
+	) as unknown as typeof fetch
+	delaySpy = spyOn(RequestClientModule, 'delay').mockImplementation(() =>
 		Promise.resolve()
 	)
 })
 
 afterEach(() => {
-	// Clean up after each test
-	if (mockFetch) {
-		mockFetch.mockClear()
+	delaySpy.mockRestore()
+})
+
+const lastBody = () => JSON.parse(String(calls.at(-1)?.init.body))
+const lastForm = () => calls.at(-1)?.init.body as FormData
+const lastHeaders = () => new Headers(calls.at(-1)?.init.headers)
+
+const catchError = async (promise: Promise<unknown>) => {
+	try {
+		await promise
+	} catch (error) {
+		return error
 	}
-	if (delaySpyOn) {
-		delaySpyOn.mockRestore()
-	}
-})
+	throw new Error('Expected promise to reject')
+}
 
-describe('basic webhook functionality', () => {
-	test('should send a basic webhook with content', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Hello, world!')
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	test('should send with custom username and avatar', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook
-			.setUsername('Test Bot')
-			.setAvatarUrl('https://example.com/avatar.png')
-			.setContent('Custom identity message')
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-})
-
-describe('embed builder functionality', () => {
-	// Test basic embed
-	test('should send basic embed with title and description', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-			.setTitle('Basic Title')
-			.setDescription('Basic Description')
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	// Test color methods
-	test('should set color using hex string', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setTitle('Color Test').setColor('#ff0000')
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	test('should set color using number', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setTitle('Color Test').setColor(0xff0000)
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	// Test author overloads
-	test('should set author using simple params', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setAuthor(
-			'Author Name',
-			'https://example.com',
-			'https://example.com/icon.png'
-		)
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	test('should set author using object', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setAuthor({
-			name: 'Author Name',
-			url: 'https://example.com',
-			icon_url: 'https://example.com/icon.png'
-		})
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	test('should reject author names exceeding 256 characters', () => {
-		const embed = new Embed()
-
-		expect(() => {
-			embed.setAuthor('a'.repeat(257))
-		}).toThrow('Author name length exceeds 256 characters')
-	})
-
-	// Test footer overloads
-	test('should set footer using simple params', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setFooter(
-			'Footer Text',
-			'https://example.com/icon.png'
-		)
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	test('should reject footer text exceeding 2048 characters', () => {
-		const embed = new Embed()
-
-		expect(() => {
-			embed.setFooter('a'.repeat(2049))
-		}).toThrow('Footer text length exceeds 2048 characters')
-	})
-
-	test('should set footer using object', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setFooter({
-			text: 'Footer Text',
-			icon_url: 'https://example.com/icon.png'
-		})
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	// Test field overloads
-	test('should add field using simple params', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().addField('Field Name', 'Field Value', true)
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	test('should add field using object', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().addField({
-			name: 'Field Name',
-			value: 'Field Value',
-			inline: true
-		})
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	// Test timestamp
-	test('should set timestamp with current time', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setTitle('Timestamp Test').setTimestamp()
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-
-	test('should set timestamp with custom date', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-			.setTitle('Custom Timestamp Test')
-			.setTimestamp(new Date('2024-01-01'))
-		webhook.addEmbed(embed)
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-	})
-})
-
-describe('validation and limits', () => {
-	test('should fail with content over 2000 characters', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		expect(() => {
-			webhook.setContent('a'.repeat(2001))
-		}).toThrow()
-	})
-
-	test('should fail with more than 10 embeds', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().setTitle('Test')
-
-		for (let i = 0; i < 11; i++) {
-			if (i < 10) {
-				webhook.addEmbed(embed)
-			} else {
-				expect(() => webhook.addEmbed(embed)).toThrow()
-			}
-		}
-	})
-
-	test('should fail with more than 25 fields', async () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		for (let i = 0; i < 26; i++) {
-			if (i < 25) {
-				embed.addField(`Field ${i}`, 'Value')
-			} else {
-				expect(() => embed.addField(`Field ${i}`, 'Value')).toThrow()
-			}
-		}
-	})
-})
-
-describe('retry configuration', () => {
-	test('should use custom retry config', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL, {
-			maxRetries: 2,
-			baseDelay: 500,
-			maxDelay: 2000
-		})
-		webhook.setContent('Testing retry config')
-		const res = await webhook.send()
-		expect(res.ok).toBeTrue()
-
-		const retryConfig = webhook.getRetryConfig()
-		expect(retryConfig).toEqual({
-			maxRetries: 2,
-			baseDelay: 500,
-			maxDelay: 2000
-		})
-	})
-})
-
-describe('webhook management', () => {
-	test('should validate webhook URL', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const valid = await webhook.isValid()
-		expect(valid).toBeTrue()
-	})
-
-	test('should reject invalid webhook URL', async () => {
-		// Mock fetch to reject for this specific test
-		mockFetch.mockImplementation(() =>
-			Promise.reject(new Error('Network error'))
-		)
-
-		const webhook = new Webhook('https://invalid.webhook.url', {
-			maxRetries: 0
-		})
-		const valid = await webhook.isValid()
-		expect(valid).toBeFalse()
-	})
-})
-
-describe('field validation', () => {
-	test('should fail with field name exceeding 256 characters', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField('a'.repeat(257), 'Value')
-		}).toThrow('Field name length exceeds 256 characters')
-	})
-
-	test('should fail with empty field value', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField('Field Name', '')
-		}).toThrow('Field value is required')
-	})
-
-	test('should fail with field value exceeding 1024 characters', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField('Field Name', 'a'.repeat(1025))
-		}).toThrow('Field value length exceeds 1024 characters')
-	})
-
-	test('should fail when adding 26th field', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		// Add 25 valid fields
-		for (let i = 0; i < 25; i++) {
-			embed.addField(`Field ${i}`, 'Value')
-		}
-
-		// Try to add 26th field
-		expect(() => {
-			embed.addField('Field 26', 'Value')
-		}).toThrow('Fields length exceeds 25')
-	})
-
-	test('should accept field with valid parameters', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField('Valid Name', 'Valid Value', true)
-		}).not.toThrow()
-	})
-
-	test('should accept field with object parameters', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField({
-				name: 'Valid Name',
-				value: 'Valid Value',
-				inline: true
-			})
-		}).not.toThrow()
-	})
-
-	test('should handle undefined fields initialization', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField('First Field', 'First Value')
-		}).not.toThrow()
-	})
-})
-
-describe('embed content validation', () => {
-	test('should fail with title exceeding 256 characters', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.setTitle('a'.repeat(257))
-		}).toThrow('Title length exceeds 256 characters')
-	})
-
-	test('should fail with description exceeding 4096 characters', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.setDescription('a'.repeat(4097))
-		}).toThrow('Description length exceeds 4096 characters')
-	})
-
-	test('should accept valid title and description', () => {
-		const _webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-
-		expect(() => {
-			embed.setTitle('a'.repeat(256)).setDescription('a'.repeat(4096))
-		}).not.toThrow()
-	})
-})
-
-describe('webhook HTTP request mocking', () => {
-	test('should make POST request with correct data', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Test message')
-
-		await webhook.send()
-
-		expect(mockFetch).toHaveBeenCalledTimes(1)
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: expect.stringContaining('"content":"Test message"')
-			})
+describe('Webhook constructor', () => {
+	test('rejects invalid URLs', () => {
+		expect(() => new Webhook('not a url')).toThrow(ValidationError)
+		expect(() => new Webhook('ftp://discord.com/api/webhooks/1/x')).toThrow(
+			ValidationError
 		)
 	})
 
-	test('should handle 429 rate limit with retry', async () => {
-		mockFetch
-			.mockImplementationOnce(() =>
-				Promise.resolve(
-					new Response('', {
-						status: 429,
-						headers: new Headers({ 'x-ratelimit-reset-after': '1' })
-					})
-				)
-			)
-			.mockImplementationOnce(() =>
-				Promise.resolve(new Response('', { status: 204 }))
-			)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Rate limited message')
-
-		const res = await webhook.send()
-
-		expect(res.ok).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledTimes(2)
-	})
-
-	test('should handle server error with retry', async () => {
-		mockFetch
-			.mockImplementationOnce(() =>
-				Promise.resolve(new Response('', { status: 500 }))
-			)
-			.mockImplementationOnce(() =>
-				Promise.resolve(new Response('', { status: 204 }))
-			)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Server error message')
-
-		const res = await webhook.send()
-
-		expect(res.ok).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledTimes(2)
-	})
-
-	test('should fail after max retries', async () => {
-		mockFetch.mockImplementation(() =>
-			Promise.resolve(new Response('', { status: 500 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL, {
-			maxRetries: 2,
-			baseDelay: 10
-		})
-		webhook.setContent('Always failing message')
-
-		const res = await webhook.send()
-
-		expect(res.ok).toBeFalse()
-		expect(mockFetch).toHaveBeenCalledTimes(3) // Initial + 2 retries
-	})
-
-	test('should handle network errors with retry', async () => {
-		mockFetch
-			.mockImplementationOnce(() => Promise.reject(new Error('Network error')))
-			.mockImplementationOnce(() =>
-				Promise.resolve(new Response('', { status: 204 }))
-			)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL, { baseDelay: 10 })
-		webhook.setContent('Network error message')
-
-		const res = await webhook.send()
-
-		expect(res.ok).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledTimes(2)
-	})
-
-	test('should handle successful response immediately', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Immediate success')
-
-		const res = await webhook.send()
-
-		expect(res.ok).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledTimes(1)
-	})
-})
-
-describe('webhook validation', () => {
-	test('should validate webhook with working URL', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('', { status: 200 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const isValid = await webhook.isValid()
-
-		expect(isValid).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				method: 'GET',
-				headers: {},
-				body: undefined
-			})
-		)
-	})
-
-	test('should invalidate webhook with failing URL', async () => {
-		mockFetch.mockImplementation(() => Promise.reject(new Error('Not found')))
-
-		const webhook = new Webhook('https://invalid.webhook.url', {
-			maxRetries: 0
-		})
-		const isValid = await webhook.isValid()
-
-		expect(isValid).toBeFalse()
-	})
-
-	test('should invalidate webhook with non-ok HTTP response', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('', { status: 404 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const isValid = await webhook.isValid()
-
-		expect(isValid).toBeFalse()
-	})
-
-	test('should pass request options through webhook validation', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('', { status: 200 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const isValid = await webhook.isValid({
-			headers: { Authorization: 'Bot token' },
-			timeoutMs: 1000
-		})
-
-		expect(isValid).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				method: 'GET',
-				headers: { Authorization: 'Bot token' }
-			})
-		)
-	})
-})
-
-describe('webhook TTS functionality', () => {
-	test('should set TTS flag to true', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setTTS(true).setContent('TTS message')
-
-		await webhook.send()
-
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				body: expect.stringContaining('"tts":true')
-			})
-		)
-	})
-
-	test('should set TTS flag to false', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setTTS(false).setContent('Non-TTS message')
-
-		await webhook.send()
-
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				body: expect.stringContaining('"tts":false')
-			})
-		)
-	})
-})
-
-describe('webhook file attachment', () => {
-	test('should set file attachment as string', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setFile('file-content').setContent('Message with file')
-
-		await webhook.send()
-
-		const request = mockFetch.mock.calls[0][1]
-		expect(request?.body).toBeInstanceOf(FormData)
-		expect(request?.headers).not.toHaveProperty('Content-Type')
-
-		const formData = request?.body as FormData
-		expect(formData.get('payload_json')).toContain(
-			'"content":"Message with file"'
-		)
-		expect(formData.get('files[0]')).toBeInstanceOf(File)
-	})
-
-	test('should set file attachment as object', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const fileAttachment = { filename: 'test.txt', data: 'content' }
-		webhook.setFile(fileAttachment).setContent('Message with file object')
-
-		await webhook.send()
-
-		const request = mockFetch.mock.calls[0][1]
-		expect(request?.body).toBeInstanceOf(FormData)
-
-		const formData = request?.body as FormData
-		const payload = JSON.parse(formData.get('payload_json') as string)
-		expect(payload.file).toBeUndefined()
-		expect(formData.get('files[0]')).toBeInstanceOf(File)
-	})
-
-	test('should decode base64 file attachment data', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook
-			.setFile({
-				filename: 'test.txt',
-				data: btoa('decoded content'),
-				encoding: 'base64'
-			})
-			.setContent('Message with base64 file object')
-
-		await webhook.send()
-
-		const request = mockFetch.mock.calls[0][1]
-		const formData = request?.body as FormData
-		const file = formData.get('files[0]') as File
-
-		expect(await file.text()).toBe('decoded content')
-	})
-
-	test('should preserve byte array file attachment data', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook
-			.setFile({
-				filename: 'bytes.bin',
-				data: new Uint8Array([1, 2, 3])
-			})
-			.setContent('Message with byte file object')
-
-		await webhook.send()
-
-		const request = mockFetch.mock.calls[0][1]
-		const formData = request?.body as FormData
-		const file = formData.get('files[0]') as File
-		const bytes = new Uint8Array(await file.arrayBuffer())
-
-		expect(Array.from(bytes)).toEqual([1, 2, 3])
-	})
-
-	test('should preserve ArrayBuffer file attachment data', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const buffer = new Uint8Array([4, 5, 6]).buffer
-		webhook
-			.setFile({
-				filename: 'buffer.bin',
-				data: buffer
-			})
-			.setContent('Message with ArrayBuffer file object')
-
-		await webhook.send()
-
-		const request = mockFetch.mock.calls[0][1]
-		const formData = request?.body as FormData
-		const file = formData.get('files[0]') as File
-		const bytes = new Uint8Array(await file.arrayBuffer())
-
-		expect(Array.from(bytes)).toEqual([4, 5, 6])
-	})
-
-	test('should preserve Blob file attachment data and content type', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook
-			.setFile({
-				filename: 'blob.json',
-				data: new Blob(['{"ok":true}'], { type: 'application/json' })
-			})
-			.setContent('Message with Blob file object')
-
-		await webhook.send()
-
-		const request = mockFetch.mock.calls[0][1]
-		const formData = request?.body as FormData
-		const file = formData.get('files[0]') as File
-
-		expect(file.name).toBe('blob.json')
-		expect(file.type).toStartWith('application/json')
-		expect(await file.text()).toBe('{"ok":true}')
-	})
-})
-
-describe('webhook method chaining', () => {
-	test('should allow method chaining', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		const result = webhook
-			.setUsername('Test Bot')
-			.setAvatarUrl('https://example.com/avatar.png')
-			.setTTS(false)
-			.setContent('Chained method call')
-
-		expect(result).toBe(webhook) // Should return same instance
-
-		await webhook.send()
-
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				body: expect.stringContaining('"username":"Test Bot"')
-			})
-		)
-	})
-})
-
-describe('embed creation and manipulation', () => {
-	test('should create embed with all properties', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed()
-			.setTitle('Complete Embed')
-			.setDescription('This is a complete embed')
-			.setColor('#ff0000')
-			.setAuthor(
-				'Author Name',
-				'https://example.com',
-				'https://example.com/icon.png'
-			)
-			.setFooter('Footer Text', 'https://example.com/footer.png')
-			.addField('Field 1', 'Value 1', true)
-			.addField('Field 2', 'Value 2', false)
-			.setTimestamp()
-
-		webhook.addEmbed(embed)
-		await webhook.send()
-
-		const callArg = mockFetch.mock.calls[0][1]
-		const body = JSON.parse(callArg?.body as string)
-
-		expect(body.embeds).toHaveLength(1)
-		expect(body.embeds[0]).toMatchObject({
-			title: 'Complete Embed',
-			description: 'This is a complete embed',
-			color: 16711680, // #ff0000 in decimal
-			author: {
-				name: 'Author Name',
-				url: 'https://example.com',
-				icon_url: 'https://example.com/icon.png'
-			},
-			footer: {
-				text: 'Footer Text',
-				icon_url: 'https://example.com/footer.png'
-			},
-			fields: [
-				{ name: 'Field 1', value: 'Value 1', inline: true },
-				{ name: 'Field 2', value: 'Value 2', inline: false }
-			]
-		})
-		expect(body.embeds[0].timestamp).toBeDefined()
-	})
-
-	test('should handle multiple embeds', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		for (let i = 0; i < 5; i++) {
-			const embed = new Embed()
-				.setTitle(`Embed ${i + 1}`)
-				.setDescription(`Description ${i + 1}`)
-			webhook.addEmbed(embed)
-		}
-
-		await webhook.send()
-
-		const callArg = mockFetch.mock.calls[0][1]
-		const body = JSON.parse(callArg?.body as string)
-
-		expect(body.embeds).toHaveLength(5)
-		expect(body.embeds[2].title).toBe('Embed 3')
-	})
-})
-
-describe('error handling', () => {
-	test('should handle fetch errors gracefully', async () => {
-		mockFetch.mockImplementation(() =>
-			Promise.reject(new Error('Network failure'))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL, { maxRetries: 0 })
-		webhook.setContent('Error test message')
-
-		const res = await webhook.send()
-
-		expect(res.ok).toBeFalse()
-	})
-
-	test('should handle non-JSON responses', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('Invalid response', { status: 400 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Non-JSON response test')
-
-		const res = await webhook.send()
-
-		expect(res.ok).toBeFalse()
-	})
-})
-
-describe('webhook toObject method', () => {
-	test('should generate correct object structure', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook
-			.setUsername('Test Bot')
-			.setAvatarUrl('https://example.com/avatar.png')
-			.setTTS(true)
-			.setContent('Test content')
-			.setFile('file-content')
-
-		const embed = new Embed().setTitle('Test Embed')
-		webhook.addEmbed(embed)
-
-		const obj = webhook.toObject()
-
-		expect(obj).toMatchObject({
-			username: 'Test Bot',
-			avatar_url: 'https://example.com/avatar.png',
-			tts: true,
-			content: 'Test content',
-			file: 'file-content',
-			embeds: [{ title: 'Test Embed' }]
-		})
-	})
-
-	test('should handle empty webhook object', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const obj = webhook.toObject()
-
-		expect(obj).toMatchObject({
-			username: undefined,
-			avatar_url: undefined,
-			tts: undefined,
-			content: undefined,
-			file: undefined,
-			embeds: undefined
-		})
-	})
-})
-
-describe('retry configuration', () => {
-	test('should use default retry config when none provided', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const config = webhook.getRetryConfig()
-
-		expect(config).toMatchObject({
-			maxRetries: 3,
+	test('accepts the legacy retry config argument', () => {
+		const hook = new Webhook(URL_BASE, { maxRetries: 7 })
+		expect(hook.getRetryConfig()).toEqual({
+			maxRetries: 7,
 			baseDelay: 1000,
 			maxDelay: 60000
 		})
 	})
 
-	test('should merge custom retry config with defaults', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL, { maxRetries: 5 })
-		const config = webhook.getRetryConfig()
+	test('accepts retry inside options', () => {
+		const hook = new Webhook(URL_BASE, { retry: { baseDelay: 5 } })
+		expect(hook.getRetryConfig()).toEqual({
+			maxRetries: 3,
+			baseDelay: 5,
+			maxDelay: 60000
+		})
+	})
 
-		expect(config).toMatchObject({
-			maxRetries: 5,
-			baseDelay: 1000, // Default value
-			maxDelay: 60000 // Default value
+	test('applies default username, avatar, mentions and headers', async () => {
+		const hook = new Webhook(URL_BASE, {
+			username: 'Bot',
+			avatarUrl: 'https://example.com/a.png',
+			allowedMentions: { parse: [] },
+			headers: { 'x-trace': 'abc' }
+		})
+		await hook.send('hi')
+		expect(lastBody()).toEqual({
+			content: 'hi',
+			username: 'Bot',
+			avatar_url: 'https://example.com/a.png',
+			allowed_mentions: { parse: [] }
+		})
+		expect(lastHeaders().get('x-trace')).toBe('abc')
+	})
+})
+
+describe('send', () => {
+	test('sends a string and returns the parsed message', async () => {
+		const message = await new Webhook(URL_BASE).send('Hello')
+		expect(message.id).toBe('111')
+		const call = calls[0]
+		expect(call?.init.method).toBe('POST')
+		expect(call?.url.pathname).toBe('/api/webhooks/123456789/test-token')
+		expect(call?.url.searchParams.get('wait')).toBe('true')
+		expect(lastHeaders().get('content-type')).toBe('application/json')
+		expect(lastBody()).toEqual({ content: 'Hello' })
+	})
+
+	test('wait: false returns undefined', async () => {
+		responses.push(new Response(null, { status: 204 }))
+		const result = await new Webhook(URL_BASE).send('Hello', { wait: false })
+		expect(result).toBeUndefined()
+		expect(calls[0]?.url.searchParams.get('wait')).toBe('false')
+	})
+
+	test('maps options to Discord fields', async () => {
+		await new Webhook(URL_BASE).send({
+			content: 'x',
+			username: 'U',
+			avatarUrl: 'https://a',
+			tts: true,
+			allowedMentions: { users: ['1'] },
+			flags: ['SuppressEmbeds', 'SuppressNotifications'],
+			threadId: '999',
+			threadName: 'New thread',
+			appliedTags: ['5']
+		})
+		expect(calls[0]?.url.searchParams.get('thread_id')).toBe('999')
+		expect(lastBody()).toEqual({
+			content: 'x',
+			username: 'U',
+			avatar_url: 'https://a',
+			tts: true,
+			allowed_mentions: { users: ['1'] },
+			flags: MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications,
+			thread_name: 'New thread',
+			applied_tags: ['5']
+		})
+	})
+
+	test('accepts flags as a number', async () => {
+		await new Webhook(URL_BASE).send({ content: 'x', flags: 4096 })
+		expect(lastBody().flags).toBe(4096)
+	})
+
+	test('keeps query parameters already in the URL', async () => {
+		await new Webhook(`${URL_BASE}?thread_id=42`).send('x')
+		expect(calls[0]?.url.searchParams.get('thread_id')).toBe('42')
+		expect(calls[0]?.url.searchParams.get('wait')).toBe('true')
+	})
+
+	test('accepts Embed builders and plain embed objects', async () => {
+		await new Webhook(URL_BASE).send({
+			embeds: [new Embed().setTitle('A'), { title: 'B', color: 1 }]
+		})
+		expect(lastBody().embeds).toEqual([
+			{ type: 'rich', title: 'A' },
+			{ title: 'B', color: 1 }
+		])
+	})
+
+	test('per-call message overrides builder state', async () => {
+		const hook = new Webhook(URL_BASE)
+			.setUsername('Builder')
+			.setContent('draft')
+		await hook.send({ content: 'override' })
+		expect(lastBody()).toEqual({ username: 'Builder', content: 'override' })
+	})
+
+	test('custom per-request headers override defaults', async () => {
+		await new Webhook(URL_BASE, { headers: { 'x-a': '1' } }).send('x', {
+			headers: { 'x-a': '2' }
+		})
+		expect(lastHeaders().get('x-a')).toBe('2')
+	})
+})
+
+describe('builder', () => {
+	test('chains and sends builder state', async () => {
+		await new Webhook(URL_BASE)
+			.setUsername('Bot')
+			.setAvatarUrl('https://a')
+			.setTTS(true)
+			.setContent('hello')
+			.setAllowedMentions({ parse: ['users'] })
+			.setFlags(['SuppressNotifications'])
+			.setThreadId('7')
+			.send()
+		expect(calls[0]?.url.searchParams.get('thread_id')).toBe('7')
+		expect(lastBody()).toEqual({
+			username: 'Bot',
+			avatar_url: 'https://a',
+			tts: true,
+			content: 'hello',
+			allowed_mentions: { parse: ['users'] },
+			flags: 4096
+		})
+	})
+
+	test('embeds are serialized at send time', async () => {
+		const embed = new Embed().setTitle('Before')
+		const hook = new Webhook(URL_BASE).addEmbed(embed)
+		embed.setTitle('After')
+		await hook.send()
+		expect(lastBody().embeds[0].title).toBe('After')
+	})
+
+	test('addEmbed throws past 10 embeds', () => {
+		const hook = new Webhook(URL_BASE)
+		for (let i = 0; i < 10; i++) hook.addEmbed(new Embed().setTitle(`${i}`))
+		expect(() => hook.addEmbed(new Embed())).toThrow(ValidationError)
+	})
+
+	test('setEmbeds replaces embeds', () => {
+		const hook = new Webhook(URL_BASE)
+			.addEmbed({ title: 'a' })
+			.setEmbeds([{ title: 'b' }])
+		expect(hook.toObject().embeds).toEqual([{ title: 'b' }])
+	})
+
+	test('setContent and setUsername validate eagerly', () => {
+		const hook = new Webhook(URL_BASE)
+		expect(() => hook.setContent('a'.repeat(2001))).toThrow(ValidationError)
+		expect(() => hook.setUsername('a'.repeat(81))).toThrow(ValidationError)
+		expect(() => hook.setThreadName('a'.repeat(101))).toThrow(ValidationError)
+	})
+
+	test('clear resets builder state but keeps defaults', () => {
+		const hook = new Webhook(URL_BASE, { username: 'Default' })
+			.setUsername('Temp')
+			.setContent('x')
+			.addEmbed({ title: 'e' })
+		hook.clear()
+		expect(hook.toObject()).toEqual({ username: 'Default' })
+	})
+
+	test('toObject returns the JSON body', () => {
+		const hook = new Webhook(URL_BASE)
+			.setContent('x')
+			.addEmbed(new Embed().setTitle('t'))
+		expect(hook.toObject()).toEqual({
+			content: 'x',
+			embeds: [{ type: 'rich', title: 't' }]
 		})
 	})
 })
 
-describe('comprehensive embed functionality', () => {
-	test('should set URL for embed', () => {
-		const embed = new Embed()
-		embed.setURL('https://example.com')
+describe('validation before sending', () => {
+	const expectValidation = async (promise: Promise<unknown>, field: string) => {
+		const error = await catchError(promise)
+		expect(error).toBeInstanceOf(ValidationError)
+		expect((error as ValidationError).field).toBe(field)
+		expect(calls).toHaveLength(0)
+	}
 
-		const obj = embed.toObject()
-		expect(obj.url).toBe('https://example.com')
+	test('rejects empty messages', async () => {
+		await expectValidation(new Webhook(URL_BASE).send(), 'content')
+		await expectValidation(new Webhook(URL_BASE).send('   '), 'content')
 	})
 
-	test('should set image with string URL', () => {
-		const embed = new Embed()
-		embed.setImage('https://example.com/image.png')
-
-		const obj = embed.toObject()
-		expect(obj.image).toMatchObject({
-			url: 'https://example.com/image.png'
-		})
+	test('rejects content over 2000 characters', async () => {
+		await expectValidation(
+			new Webhook(URL_BASE).send('a'.repeat(2001)),
+			'content'
+		)
 	})
 
-	test('should set image with object', () => {
-		const embed = new Embed()
-		embed.setImage({
-			url: 'https://example.com/image.png',
-			height: 100,
-			width: 200
-		})
-
-		const obj = embed.toObject()
-		expect(obj.image).toMatchObject({
-			url: 'https://example.com/image.png',
-			height: 100,
-			width: 200
-		})
+	test('rejects more than 10 embeds', async () => {
+		const embeds = Array.from({ length: 11 }, () => ({ title: 'x' }))
+		await expectValidation(new Webhook(URL_BASE).send({ embeds }), 'embeds')
 	})
 
-	test('should set image with URL and dimensions', () => {
-		const embed = new Embed()
-		embed.setImage('https://example.com/image.png', 300, 400)
-
-		const obj = embed.toObject()
-		expect(obj.image).toMatchObject({
-			url: 'https://example.com/image.png',
-			height: 300,
-			width: 400
-		})
+	test('rejects more than 10 files', async () => {
+		const files = Array.from({ length: 11 }, () => 'x')
+		await expectValidation(new Webhook(URL_BASE).send({ files }), 'files')
 	})
 
-	test('should set thumbnail with string URL', () => {
-		const embed = new Embed()
-		embed.setThumbnail('https://example.com/thumb.png')
-
-		const obj = embed.toObject()
-		expect(obj.thumbnail).toMatchObject({
-			url: 'https://example.com/thumb.png'
-		})
+	test('reports the path of invalid embed values', async () => {
+		await expectValidation(
+			new Webhook(URL_BASE).send({
+				embeds: [
+					{ title: 'ok' },
+					{ fields: [{ name: 'a', value: 'a'.repeat(1025) }] }
+				]
+			}),
+			'embeds[1].fields[0].value'
+		)
+		await expectValidation(
+			new Webhook(URL_BASE).send({
+				embeds: [{ description: 'a'.repeat(4097) }]
+			}),
+			'embeds[0].description'
+		)
+		await expectValidation(
+			new Webhook(URL_BASE).send({
+				embeds: [{ fields: [{ name: '', value: 'v' }] }]
+			}),
+			'embeds[0].fields[0].name'
+		)
 	})
 
-	test('should set thumbnail with object', () => {
-		const embed = new Embed()
-		embed.setThumbnail({
-			url: 'https://example.com/thumb.png',
-			height: 50,
-			width: 50
-		})
-
-		const obj = embed.toObject()
-		expect(obj.thumbnail).toMatchObject({
-			url: 'https://example.com/thumb.png',
-			height: 50,
-			width: 50
-		})
-	})
-
-	test('should set video with string URL', () => {
-		const embed = new Embed()
-		embed.setVideo('https://example.com/video.mp4')
-
-		const obj = embed.toObject()
-		expect(obj.video).toMatchObject({
-			url: 'https://example.com/video.mp4'
-		})
-	})
-
-	test('should set video with object', () => {
-		const embed = new Embed()
-		embed.setVideo({
-			url: 'https://example.com/video.mp4',
-			height: 720,
-			width: 1280
-		})
-
-		const obj = embed.toObject()
-		expect(obj.video).toMatchObject({
-			url: 'https://example.com/video.mp4',
-			height: 720,
-			width: 1280
-		})
-	})
-
-	test('should set provider with string name', () => {
-		const embed = new Embed()
-		embed.setProvider('YouTube')
-
-		const obj = embed.toObject()
-		expect(obj.provider).toMatchObject({
-			name: 'YouTube'
-		})
-	})
-
-	test('should set provider with name and URL', () => {
-		const embed = new Embed()
-		embed.setProvider('YouTube', 'https://youtube.com')
-
-		const obj = embed.toObject()
-		expect(obj.provider).toMatchObject({
-			name: 'YouTube',
-			url: 'https://youtube.com'
-		})
-	})
-
-	test('should set provider with object', () => {
-		const embed = new Embed()
-		embed.setProvider({
-			name: 'Custom Provider',
-			url: 'https://custom.com'
-		})
-
-		const obj = embed.toObject()
-		expect(obj.provider).toMatchObject({
-			name: 'Custom Provider',
-			url: 'https://custom.com'
-		})
-	})
-
-	test('should set fields using setFields method', () => {
-		const embed = new Embed()
-		const fields = [
-			{ name: 'Field 1', value: 'Value 1', inline: true },
-			{ name: 'Field 2', value: 'Value 2', inline: false }
+	test('enforces the 6000 character total across embeds', async () => {
+		const embeds = [
+			{ description: 'a'.repeat(4000) },
+			{ description: 'a'.repeat(2001) }
 		]
-		embed.setFields(fields)
-
-		const obj = embed.toObject()
-		expect(obj.fields).toHaveLength(2)
-		expect(obj.fields).toEqual(fields)
+		const error = await catchError(new Webhook(URL_BASE).send({ embeds }))
+		expect(error).toBeInstanceOf(ValidationError)
+		expect((error as ValidationError).actualLength).toBe(6001)
 	})
 
-	test('should reject setFields with more than 25 fields', () => {
-		const embed = new Embed()
-		const fields = Array.from({ length: 26 }, (_, i) => ({
-			name: `Field ${i}`,
-			value: `Value ${i}`,
-			inline: false
-		}))
-
-		expect(() => {
-			embed.setFields(fields)
-		}).toThrow('Fields length exceeds 25')
+	test('validate() checks builder state', () => {
+		expect(() => new Webhook(URL_BASE).validate()).toThrow(ValidationError)
+		expect(() => new Webhook(URL_BASE).setContent('x').validate()).not.toThrow()
 	})
+})
 
-	test('should convert color from hex string to number', () => {
-		const embed = new Embed()
-		embed.setColor('#ff0000')
-
-		const obj = embed.toObject()
-		expect(obj.color).toBe(16711680) // #ff0000 in decimal
-	})
-
-	test('should convert color from hex string without hash', () => {
-		const embed = new Embed()
-		embed.setColor('00ff00')
-
-		const obj = embed.toObject()
-		expect(obj.color).toBe(65280) // #00ff00 in decimal
-	})
-
-	test('should accept color as number directly', () => {
-		const embed = new Embed()
-		embed.setColor(255) // Blue
-
-		const obj = embed.toObject()
-		expect(obj.color).toBe(255)
-	})
-
-	test('should reject invalid hex color strings', () => {
-		const embed = new Embed()
-
-		expect(() => {
-			embed.setColor('not-a-color')
-		}).toThrow(ValidationError)
-	})
-
-	test('should reject color numbers outside Discord range', () => {
-		const embed = new Embed()
-
-		expect(() => {
-			embed.setColor(0x1000000)
-		}).toThrow(ValidationError)
-	})
-
-	test('should handle empty embed toObject correctly', () => {
-		const embed = new Embed()
-		const obj = embed.toObject()
-
-		expect(obj).toMatchObject({
-			title: undefined,
-			type: 'rich',
-			url: undefined,
-			description: undefined,
-			timestamp: undefined,
-			color: undefined,
-			footer: undefined,
-			image: undefined,
-			thumbnail: undefined,
-			video: undefined,
-			provider: undefined,
-			author: undefined,
-			fields: undefined
+describe('files', () => {
+	test('sends multipart with payload_json and attachment metadata', async () => {
+		await new Webhook(URL_BASE).send({
+			content: 'files',
+			files: [
+				{ filename: 'a.txt', data: 'hello', description: 'first' },
+				{
+					filename: 'b.bin',
+					data: new Uint8Array([1, 2, 3]),
+					contentType: 'application/octet-stream'
+				}
+			]
 		})
-	})
-
-	test('should chain all embed methods', () => {
-		const embed = new Embed()
-
-		const result = embed
-			.setTitle('Chained Title')
-			.setDescription('Chained Description')
-			.setURL('https://example.com')
-			.setColor('#ff0000')
-			.setAuthor('Author', 'https://author.com', 'https://author.com/icon.png')
-			.setFooter('Footer', 'https://footer.com/icon.png')
-			.setImage('https://example.com/image.png')
-			.setThumbnail('https://example.com/thumb.png')
-			.setProvider('Provider', 'https://provider.com')
-			.addField('Field', 'Value', true)
-			.setTimestamp()
-
-		expect(result).toBe(embed) // Should return same instance for chaining
-
-		const obj = embed.toObject()
-		expect(obj.title).toBe('Chained Title')
-		expect(obj.description).toBe('Chained Description')
-		expect(obj.url).toBe('https://example.com')
-		expect(obj.fields).toHaveLength(1)
-	})
-})
-
-describe('embed error handling', () => {
-	test('should validate field name in object mode', () => {
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField({
-				name: 'a'.repeat(257),
-				value: 'Valid value',
-				inline: false
-			})
-		}).toThrow('Field name length exceeds 256 characters')
-	})
-
-	test('should validate empty field value in object mode', () => {
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField({
-				name: 'Valid name',
-				value: '',
-				inline: false
-			})
-		}).toThrow('Field value is required')
-	})
-
-	test('should validate long field value in object mode', () => {
-		const embed = new Embed()
-
-		expect(() => {
-			embed.addField({
-				name: 'Valid name',
-				value: 'a'.repeat(1025),
-				inline: false
-			})
-		}).toThrow('Field value length exceeds 1024 characters')
-	})
-
-	test('should handle timestamp with specific date', () => {
-		const embed = new Embed()
-		const testDate = new Date('2023-01-01T00:00:00.000Z')
-		embed.setTimestamp(testDate)
-
-		const obj = embed.toObject()
-		expect(obj.timestamp).toBe('2023-01-01T00:00:00.000Z')
-	})
-
-	test('should handle current timestamp when no date provided', () => {
-		const embed = new Embed()
-		const beforeTime = Date.now()
-		embed.setTimestamp()
-		const afterTime = Date.now()
-
-		const obj = embed.toObject()
-		const timestampTime = new Date(obj.timestamp ?? '').getTime()
-
-		expect(timestampTime).toBeGreaterThanOrEqual(beforeTime)
-		expect(timestampTime).toBeLessThanOrEqual(afterTime)
-	})
-})
-
-describe('webhook management methods', () => {
-	test('should modify webhook successfully', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('', { status: 204 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const res = await webhook.modify({
-			name: 'New Webhook Name',
-			avatar: 'base64-encoded-avatar'
+		const form = lastForm()
+		expect(form).toBeInstanceOf(FormData)
+		expect(lastHeaders().has('content-type')).toBeFalse()
+		expect(JSON.parse(String(form.get('payload_json')))).toEqual({
+			content: 'files',
+			attachments: [
+				{ id: 0, filename: 'a.txt', description: 'first' },
+				{ id: 1, filename: 'b.bin' }
+			]
 		})
-
-		expect(res).toMatchObject({ ok: true, status: 204 })
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: expect.stringContaining('"name":"New Webhook Name"')
-			})
-		)
+		const first = form.get('files[0]') as File
+		const second = form.get('files[1]') as File
+		expect(first.name).toBe('a.txt')
+		expect(await first.text()).toBe('hello')
+		expect(second.type).toBe('application/octet-stream')
+		expect([...new Uint8Array(await second.arrayBuffer())]).toEqual([1, 2, 3])
 	})
 
-	test('should return false for modify webhook with non-204 status', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('', { status: 200 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const res = await webhook.modify({ name: 'Test' })
-
-		expect(res).toMatchObject({ ok: true, status: 200 })
+	test('a file alone is a valid message', async () => {
+		await new Webhook(URL_BASE).setFile('plain text').send()
+		const file = lastForm().get('files[0]') as File
+		expect(file.name).toBe('file.txt')
+		expect(await file.text()).toBe('plain text')
 	})
 
-	test('should handle modify webhook network error', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.reject(new Error('Network error'))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL, { maxRetries: 0 })
-		const res = await webhook.modify({ name: 'Test' })
-
-		expect(res).toMatchObject({ ok: false, status: 0 })
+	test('addFile appends and setFile replaces', async () => {
+		const hook = new Webhook(URL_BASE).addFile('a').addFile('b')
+		await hook.send()
+		expect(lastForm().get('files[1]')).not.toBeNull()
+		await hook.setFile('c').send()
+		expect(lastForm().get('files[1]')).toBeNull()
 	})
 
-	test('should get webhook information successfully', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('', { status: 204 }))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const res = await webhook.get()
-
-		expect(res).toMatchObject({ ok: true, status: 204 })
-		expect(mockFetch).toHaveBeenCalledWith(
-			TEST_WEBHOOK_URL,
-			expect.objectContaining({
-				method: 'GET',
-				headers: {},
-				body: undefined
-			})
-		)
+	test('decodes base64 data', async () => {
+		await new Webhook(URL_BASE).send({
+			files: [{ filename: 'x.txt', data: btoa('decoded!'), encoding: 'base64' }]
+		})
+		expect(await (lastForm().get('files[0]') as File).text()).toBe('decoded!')
 	})
 
-	test('should return false for get webhook with non-204 status', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.resolve(new Response('', { status: 404 }))
+	test('sends only the bytes of a typed array view', async () => {
+		const view = new Uint8Array([9, 1, 2, 9]).subarray(1, 3)
+		await new Webhook(URL_BASE).send({ files: [{ filename: 'x', data: view }] })
+		const bytes = new Uint8Array(
+			await (lastForm().get('files[0]') as File).arrayBuffer()
 		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const res = await webhook.get()
-
-		expect(res).toMatchObject({ ok: false, status: 404 })
+		expect([...bytes]).toEqual([1, 2])
 	})
 
-	test('should handle get webhook network error', async () => {
-		mockFetch.mockImplementationOnce(() =>
-			Promise.reject(new Error('Network failure'))
-		)
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL, { maxRetries: 0 })
-		const res = await webhook.get()
-
-		expect(res).toMatchObject({ ok: false, status: 0 })
-	})
-
-	test('should handle modify webhook error thrown by client', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		// Mock the client.send method to throw an error to test the catch block
-		const mockSend = mock<RequestClient['send']>(() =>
-			Promise.reject(new Error('Client error'))
-		)
-		;(webhook as unknown as { client: RequestClient }).client.send = mockSend
-
-		await expect(async () => {
-			await webhook.modify({ name: 'Test' })
-		}).toThrow('Client error')
-	})
-
-	test('should handle get webhook error thrown by client', async () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		// Mock the client.send method to throw an error to test the catch block
-		const mockSend = mock<RequestClient['send']>(() =>
-			Promise.reject(new Error('Client error'))
-		)
-		;(webhook as unknown as { client: RequestClient }).client.send = mockSend
-
-		await expect(async () => {
-			await webhook.get()
-		}).toThrow('Client error')
+	test('sends Blob and ArrayBuffer data', async () => {
+		await new Webhook(URL_BASE).send({
+			files: [
+				{ filename: 'a', data: new Blob(['blob']) },
+				{ filename: 'b', data: new TextEncoder().encode('buf').buffer }
+			]
+		})
+		expect(await (lastForm().get('files[0]') as File).text()).toBe('blob')
+		expect(await (lastForm().get('files[1]') as File).text()).toBe('buf')
 	})
 })
 
-describe('webhook validation method', () => {
-	test('should call validate method correctly', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('a'.repeat(1999)) // Valid content
-
-		expect(() => {
-			webhook.validate()
-		}).not.toThrow()
+describe('errors', () => {
+	test('throws WebhookError with Discord code and readable details', async () => {
+		responses.push(
+			json(
+				{
+					message: 'Invalid Form Body',
+					code: 50035,
+					errors: {
+						embeds: {
+							'0': {
+								description: {
+									_errors: [
+										{
+											code: 'BASE_TYPE_MAX_LENGTH',
+											message: 'Must be 4096 or fewer in length.'
+										}
+									]
+								}
+							}
+						}
+					}
+				},
+				400
+			)
+		)
+		const error = (await catchError(
+			new Webhook(URL_BASE).send('x')
+		)) as WebhookError
+		expect(error).toBeInstanceOf(WebhookError)
+		expect(error.status).toBe(400)
+		expect(error.statusCode).toBe(400)
+		expect(error.code).toBe(50035)
+		expect(error.message).toBe(
+			'Invalid Form Body (code 50035): embeds.0.description: Must be 4096 or fewer in length.'
+		)
+		expect(error.body).toMatchObject({ code: 50035 })
+		expect(calls).toHaveLength(1)
 	})
 
-	test('should validate webhook with valid embeds and fields', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Valid content')
-
-		// Add just one simple embed without fields first
-		const embed = new Embed().setTitle('Test Embed')
-		webhook.addEmbed(embed)
-
-		expect(() => {
-			webhook.validate()
-		}).not.toThrow()
+	test('throws WebhookNotFoundError on 404', async () => {
+		responses.push(json({ message: 'Unknown Webhook', code: 10015 }, 404))
+		const error = (await catchError(
+			new Webhook(URL_BASE).send('x')
+		)) as WebhookNotFoundError
+		expect(error).toBeInstanceOf(WebhookNotFoundError)
+		expect(error.message).toBe('Unknown Webhook (code 10015)')
+		expect(error.code).toBe(10015)
 	})
 
-	test('should validate content length limits', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		// Use reflection to set content without triggering setContent validation
-		// oxlint-disable-next-line no-explicit-any -- testing internal state
-		;(webhook as any).content = 'a'.repeat(2001)
-
-		expect(() => {
-			webhook.validate()
-		}).toThrow('Content length exceeds 2000 characters')
+	test('uses plain text bodies as the message', async () => {
+		responses.push(new Response('Bad gateway text', { status: 401 }))
+		const error = (await catchError(
+			new Webhook(URL_BASE).send('x')
+		)) as WebhookError
+		expect(error.message).toBe('Bad gateway text')
+		expect(error.status).toBe(401)
 	})
 
-	test('should validate embed limits', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		// Use reflection to set embeds directly
-		const embeds = []
-		for (let i = 0; i < 11; i++) {
-			embeds.push(new Embed().setTitle(`Embed ${i}`).toObject())
-		}
-		// oxlint-disable-next-line no-explicit-any -- testing internal state
-		;(webhook as any).embeds = embeds
-
-		expect(() => {
-			webhook.validate()
-		}).toThrow('Embeds length exceeds 10')
+	test('retries 429 using retry_after from the body', async () => {
+		responses.push(
+			json(
+				{
+					message: 'You are being rate limited.',
+					retry_after: 1.5,
+					global: false
+				},
+				429
+			)
+		)
+		const message = await new Webhook(URL_BASE).send('x')
+		expect(message.id).toBe('111')
+		expect(calls).toHaveLength(2)
+		expect(delaySpy.mock.calls[0]?.[0]).toBe(1500)
 	})
 
-	test('should validate field limits in embeds', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		// Create an embed with too many fields using reflection
-		const embed = new Embed()
-		const fields = []
-		for (let i = 0; i < 26; i++) {
-			fields.push({ name: `Field ${i}`, value: 'Value', inline: false })
-		}
-		// oxlint-disable-next-line no-explicit-any -- testing internal state
-		;(embed as any).fields = fields
-
-		webhook.addEmbed(embed)
-
-		expect(() => {
-			webhook.validate()
-		}).toThrow('Fields length exceeds 25')
+	test('retries 429 using the retry-after header', async () => {
+		responses.push(
+			new Response('', { status: 429, headers: { 'retry-after': '2' } })
+		)
+		await new Webhook(URL_BASE).send('x')
+		expect(delaySpy.mock.calls[0]?.[0]).toBe(2000)
 	})
 
-	test('should validate field name length limits', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-
-		// Create an embed with a field that has a too-long name
-		const embed = new Embed()
-		const fields = [{ name: 'a'.repeat(257), value: 'Value', inline: false }]
-		// oxlint-disable-next-line no-explicit-any -- testing internal state
-		;(embed as any).fields = fields
-
-		webhook.addEmbed(embed)
-
-		expect(() => {
-			webhook.validate()
-		}).toThrow('Field name length exceeds 256 characters')
+	test('throws RateLimitError after exhausting retries', async () => {
+		for (let i = 0; i < 4; i++) responses.push(json({ retry_after: 0.1 }, 429))
+		const error = (await catchError(
+			new Webhook(URL_BASE).send('x')
+		)) as RateLimitError
+		expect(error).toBeInstanceOf(RateLimitError)
+		expect(error.retryAfter).toBe(100)
+		expect(calls).toHaveLength(4)
 	})
 
-	test('should accept field names at the 256 character limit', () => {
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		const embed = new Embed().addField('a'.repeat(256), 'Value')
-
-		webhook.addEmbed(embed)
-
-		expect(() => {
-			webhook.validate()
-		}).not.toThrow()
+	test('throws RateLimitError immediately when retry_after exceeds maxDelay', async () => {
+		responses.push(json({ retry_after: 120 }, 429))
+		const error = (await catchError(
+			new Webhook(URL_BASE).send('x')
+		)) as RateLimitError
+		expect(error).toBeInstanceOf(RateLimitError)
+		expect(error.retryAfter).toBe(120000)
+		expect(calls).toHaveLength(1)
 	})
-})
 
-describe('request client edge cases', () => {
-	test('should respect caller abort signal when timeout is also set', async () => {
-		mockFetch.mockImplementation((_url, init) => {
-			const signal = init?.signal as AbortSignal
-			return new Promise((_resolve, reject) => {
-				signal.addEventListener('abort', () => {
-					reject(new Error('aborted by caller'))
+	test('retries server errors with backoff', async () => {
+		responses.push(
+			new Response('', { status: 502 }),
+			new Response('', { status: 503 })
+		)
+		await new Webhook(URL_BASE).send('x')
+		expect(calls).toHaveLength(3)
+	})
+
+	test('throws after exhausting server error retries', async () => {
+		for (let i = 0; i < 3; i++)
+			responses.push(new Response('', { status: 500 }))
+		const error = (await catchError(
+			new Webhook(URL_BASE, { retry: { maxRetries: 2 } }).send('x')
+		)) as WebhookError
+		expect(error.status).toBe(500)
+		expect(calls).toHaveLength(3)
+	})
+
+	test('does not retry network errors on send (avoids duplicate messages)', async () => {
+		responses.push(new TypeError('fetch failed'))
+		const error = (await catchError(
+			new Webhook(URL_BASE).send('x')
+		)) as NetworkError
+		expect(error).toBeInstanceOf(NetworkError)
+		expect(error.status).toBe(0)
+		expect(error.message).toBe('fetch failed')
+		expect(error.cause).toBeInstanceOf(TypeError)
+		expect(calls).toHaveLength(1)
+	})
+
+	test('retries network errors on idempotent requests', async () => {
+		responses.push(new TypeError('fetch failed'), json({ id: '1' }))
+		await new Webhook(URL_BASE).get()
+		expect(calls).toHaveLength(2)
+	})
+
+	test('throws TimeoutError when timeoutMs is exceeded', async () => {
+		responses.push(
+			(init) =>
+				new Promise((_, reject) => {
+					init.signal?.addEventListener('abort', () =>
+						reject(new DOMException('aborted', 'AbortError'))
+					)
 				})
-			})
-		})
-
-		const controller = new AbortController()
-		const webhook = new Webhook(TEST_WEBHOOK_URL)
-		webhook.setContent('Abort test')
-
-		const promise = webhook.send({
-			signal: controller.signal,
-			timeoutMs: 10_000
-		})
-		controller.abort()
-
-		const res = await promise
-		expect(res.ok).toBeFalse()
-		expect(res.error).toBe('aborted by caller')
-		expect(mockFetch).toHaveBeenCalledTimes(1)
+		)
+		const error = await catchError(
+			new Webhook(URL_BASE).send('x', { timeoutMs: 5 })
+		)
+		expect(error).toBeInstanceOf(TimeoutError)
+		expect((error as TimeoutError).message).toBe('Request timed out after 5ms')
 	})
 
-	test('should isolate retry counters across concurrent sends', async () => {
-		let calls = 0
-		mockFetch.mockImplementation(() => {
-			calls++
-			if (calls <= 2) {
-				return Promise.resolve(new Response('', { status: 500 }))
-			}
+	test('throws RequestAbortedError when the signal aborts', async () => {
+		const controller = new AbortController()
+		controller.abort()
+		responses.push(
+			new DOMException('aborted', 'AbortError') as unknown as Error
+		)
+		const error = await catchError(
+			new Webhook(URL_BASE).send('x', { signal: controller.signal })
+		)
+		expect(error).toBeInstanceOf(RequestAbortedError)
+	})
 
-			return Promise.resolve(new Response('', { status: 204 }))
+	test('stops retrying when aborted during the backoff delay', async () => {
+		const controller = new AbortController()
+		delaySpy.mockImplementation(() => {
+			controller.abort()
+			return Promise.reject(controller.signal.reason)
 		})
-
-		const webhook = new Webhook(TEST_WEBHOOK_URL, {
-			maxRetries: 1,
-			baseDelay: 1
-		})
-		webhook.setContent('Concurrent retry test')
-
-		const [first, second] = await Promise.all([webhook.send(), webhook.send()])
-
-		expect(first.ok).toBeTrue()
-		expect(second.ok).toBeTrue()
-		expect(mockFetch).toHaveBeenCalledTimes(4)
+		responses.push(new Response('', { status: 500 }))
+		const error = await catchError(
+			new Webhook(URL_BASE).send('x', { signal: controller.signal })
+		)
+		expect(error).toBeInstanceOf(RequestAbortedError)
+		expect(calls).toHaveLength(1)
 	})
 })
 
-describe('delay function', () => {
-	test('should delay execution for specified seconds', async () => {
-		// Restore the real delay function for this test
-		delaySpyOn.mockRestore()
+describe('trySend', () => {
+	test('returns data on success', async () => {
+		const result = await new Webhook(URL_BASE).trySend('x')
+		expect(result.ok).toBeTrue()
+		expect(result.data?.id).toBe('111')
+	})
 
-		const startTime = Date.now()
-		await RequestClientModule.delay(0.1) // 100ms
-		const endTime = Date.now()
+	test('returns the error instead of throwing', async () => {
+		responses.push(json({ message: 'Unknown Webhook', code: 10015 }, 404))
+		const result = await new Webhook(URL_BASE).trySend('x')
+		expect(result.ok).toBeFalse()
+		expect(result.error).toBeInstanceOf(WebhookNotFoundError)
+	})
 
-		expect(endTime - startTime).toBeGreaterThanOrEqual(90) // Allow some margin
+	test('returns validation errors too', async () => {
+		const result = await new Webhook(URL_BASE).trySend('')
+		expect(result.error).toBeInstanceOf(ValidationError)
+	})
+})
 
-		// Re-mock it for other tests
-		delaySpyOn = spyOn(RequestClientModule, 'delay').mockImplementation(() =>
-			Promise.resolve()
+describe('messages', () => {
+	test('getMessage', async () => {
+		const message = await new Webhook(URL_BASE).getMessage('555', {
+			threadId: '9'
+		})
+		expect(message.id).toBe('111')
+		expect(calls[0]?.init.method).toBe('GET')
+		expect(calls[0]?.url.pathname).toBe(
+			'/api/webhooks/123456789/test-token/messages/555'
 		)
+		expect(calls[0]?.url.searchParams.get('thread_id')).toBe('9')
+		expect(calls[0]?.init.body).toBeUndefined()
+	})
+
+	test('editMessage with a string', async () => {
+		await new Webhook(URL_BASE).editMessage('555', 'edited')
+		expect(calls[0]?.init.method).toBe('PATCH')
+		expect(calls[0]?.url.pathname).toEndWith('/messages/555')
+		expect(lastBody()).toEqual({ content: 'edited' })
+	})
+
+	test('editMessage does not apply sender defaults and allows partial edits', async () => {
+		await new Webhook(URL_BASE, { username: 'Bot' }).editMessage('555', {
+			embeds: [],
+			threadId: '3'
+		})
+		expect(lastBody()).toEqual({ embeds: [] })
+		expect(calls[0]?.url.searchParams.get('thread_id')).toBe('3')
+	})
+
+	test('editMessage validates', async () => {
+		const error = await catchError(
+			new Webhook(URL_BASE).editMessage('1', 'a'.repeat(2001))
+		)
+		expect(error).toBeInstanceOf(ValidationError)
+	})
+
+	test('deleteMessage', async () => {
+		responses.push(new Response(null, { status: 204 }))
+		const result = await new Webhook(URL_BASE).deleteMessage('555')
+		expect(result).toBeUndefined()
+		expect(calls[0]?.init.method).toBe('DELETE')
+		expect(calls[0]?.url.pathname).toEndWith('/messages/555')
+	})
+
+	test('requires a message id', async () => {
+		const error = await catchError(new Webhook(URL_BASE).deleteMessage(''))
+		expect(error).toBeInstanceOf(ValidationError)
+		expect(calls).toHaveLength(0)
+	})
+})
+
+describe('webhook management', () => {
+	const WEBHOOK = {
+		id: '123456789',
+		type: 1,
+		name: 'Hook',
+		channel_id: '2',
+		avatar: null,
+		application_id: null
+	}
+
+	test('get returns parsed webhook info', async () => {
+		responses.push(json(WEBHOOK))
+		const info = await new Webhook(URL_BASE).get()
+		expect(info.name).toBe('Hook')
+		expect(calls[0]?.url.search).toBe('')
+	})
+
+	test('modify sends PATCH with changes', async () => {
+		responses.push(json({ ...WEBHOOK, name: 'New' }))
+		const info = await new Webhook(URL_BASE).modify({ name: 'New' })
+		expect(info.name).toBe('New')
+		expect(calls[0]?.init.method).toBe('PATCH')
+		expect(lastBody()).toEqual({ name: 'New' })
+	})
+
+	test('modify validates the name', async () => {
+		const error = await catchError(
+			new Webhook(URL_BASE).modify({ name: 'a'.repeat(81) })
+		)
+		expect(error).toBeInstanceOf(ValidationError)
+	})
+
+	test('deleteWebhook sends DELETE', async () => {
+		responses.push(new Response(null, { status: 204 }))
+		await new Webhook(URL_BASE).deleteWebhook()
+		expect(calls[0]?.init.method).toBe('DELETE')
+		expect(calls[0]?.url.pathname).toBe('/api/webhooks/123456789/test-token')
+	})
+
+	test('isValid', async () => {
+		responses.push(json(WEBHOOK))
+		expect(await new Webhook(URL_BASE).isValid()).toBeTrue()
+		responses.push(json({ message: 'Unknown Webhook', code: 10015 }, 404))
+		expect(await new Webhook(URL_BASE).isValid()).toBeFalse()
+	})
+})
+
+describe('Embed', () => {
+	test('builds a full embed', () => {
+		const date = new Date('2026-01-01T00:00:00.000Z')
+		const embed = new Embed()
+			.setTitle('Title')
+			.setUrl('https://example.com')
+			.setDescription('Desc')
+			.setColor('#ff0000')
+			.setTimestamp(date)
+			.setAuthor('Author', 'https://a', 'https://icon')
+			.setFooter('Footer', 'https://f')
+			.setImage('https://img', 10, 20)
+			.setThumbnail({ url: 'https://thumb' })
+			.setVideo('https://video')
+			.setProvider('Provider', 'https://p')
+			.addField('a', 'b', true)
+			.addField({ name: 'c', value: 'd' })
+		expect(embed.toObject()).toEqual({
+			type: 'rich',
+			title: 'Title',
+			url: 'https://example.com',
+			description: 'Desc',
+			color: 0xff0000,
+			timestamp: '2026-01-01T00:00:00.000Z',
+			author: { name: 'Author', url: 'https://a', icon_url: 'https://icon' },
+			footer: {
+				text: 'Footer',
+				icon_url: 'https://f',
+				proxy_icon_url: undefined
+			},
+			image: { url: 'https://img', height: 10, width: 20 },
+			thumbnail: { url: 'https://thumb' },
+			video: { url: 'https://video', height: undefined, width: undefined },
+			provider: { name: 'Provider', url: 'https://p' },
+			fields: [
+				{ name: 'a', value: 'b', inline: true },
+				{ name: 'c', value: 'd' }
+			]
+		})
+	})
+
+	test('toObject omits unset values', () => {
+		expect(new Embed().setTitle('x').toObject()).toEqual({
+			type: 'rich',
+			title: 'x'
+		})
+	})
+
+	test('can start from a plain object', () => {
+		const source = { title: 'Hi', fields: [{ name: 'a', value: 'b' }] }
+		const embed = Embed.from(source).addField('c', 'd')
+		expect(embed.toObject().fields).toHaveLength(2)
+		expect(source.fields).toHaveLength(1)
+	})
+
+	test('JSON.stringify uses toObject', () => {
+		expect(JSON.parse(JSON.stringify(new Embed().setTitle('x')))).toEqual({
+			type: 'rich',
+			title: 'x'
+		})
+	})
+
+	test('setURL is kept as an alias', () => {
+		expect(new Embed().setURL('https://x').toObject().url).toBe('https://x')
+	})
+
+	test('colors', () => {
+		expect(new Embed().setColor('00ff00').toObject().color).toBe(0x00ff00)
+		expect(new Embed().setColor('#FFF').toObject().color).toBe(0xfff)
+		expect(new Embed().setColor(0).toObject().color).toBe(0)
+		expect(() => new Embed().setColor('#zzzzzz')).toThrow(ValidationError)
+		expect(() => new Embed().setColor('#1234567')).toThrow(ValidationError)
+		expect(() => new Embed().setColor(-1)).toThrow(ValidationError)
+		expect(() => new Embed().setColor(0x1000000)).toThrow(ValidationError)
+		expect(() => new Embed().setColor(1.5)).toThrow(ValidationError)
+	})
+
+	test('timestamps', () => {
+		expect(new Embed().setTimestamp(0).toObject().timestamp).toBe(
+			'1970-01-01T00:00:00.000Z'
+		)
+		expect(new Embed().setTimestamp('2026-05-01').toObject().timestamp).toBe(
+			'2026-05-01T00:00:00.000Z'
+		)
+		expect(new Embed().setTimestamp().toObject().timestamp).toBeString()
+		expect(() => new Embed().setTimestamp('nope')).toThrow(ValidationError)
+	})
+
+	test('length limits', () => {
+		expect(() => new Embed().setTitle('a'.repeat(257))).toThrow(ValidationError)
+		expect(() => new Embed().setDescription('a'.repeat(4097))).toThrow(
+			ValidationError
+		)
+		expect(() => new Embed().setFooter('a'.repeat(2049))).toThrow(
+			ValidationError
+		)
+		expect(() => new Embed().setFooter({ text: 'a'.repeat(2049) })).toThrow(
+			ValidationError
+		)
+		expect(() => new Embed().setAuthor('a'.repeat(257))).toThrow(
+			ValidationError
+		)
+		expect(() => new Embed().setAuthor({ name: 'a'.repeat(257) })).toThrow(
+			ValidationError
+		)
+		expect(() => new Embed().setTitle('a'.repeat(256))).not.toThrow()
+		expect(() => new Embed().setDescription('a'.repeat(4096))).not.toThrow()
+	})
+
+	test('field rules', () => {
+		expect(() => new Embed().addField('a'.repeat(257), 'v')).toThrow(
+			ValidationError
+		)
+		expect(() => new Embed().addField('n', 'a'.repeat(1025))).toThrow(
+			ValidationError
+		)
+		expect(() => new Embed().addField('n', '')).toThrow(ValidationError)
+		expect(() => new Embed().addField('', 'v')).toThrow(ValidationError)
+
+		const embed = new Embed()
+		for (let i = 0; i < 25; i++) embed.addField(`${i}`, 'v')
+		expect(() => embed.addField('26', 'v')).toThrow(ValidationError)
+
+		const fields = Array.from({ length: 26 }, (_, i) => ({
+			name: `${i}`,
+			value: 'v'
+		}))
+		expect(() => new Embed().setFields(fields)).toThrow(ValidationError)
+		expect(
+			new Embed().addField('x', 'y').setFields(fields.slice(0, 2)).toObject()
+				.fields
+		).toHaveLength(2)
+		expect(
+			new Embed().addFields(...fields.slice(0, 3)).toObject().fields
+		).toHaveLength(3)
+	})
+
+	test('validation errors include field and limits', () => {
+		try {
+			new Embed().setTitle('a'.repeat(300))
+		} catch (error) {
+			expect(error).toBeInstanceOf(ValidationError)
+			expect((error as ValidationError).field).toBe('title')
+			expect((error as ValidationError).maxLength).toBe(256)
+			expect((error as ValidationError).actualLength).toBe(300)
+			expect((error as ValidationError).message).toBe(
+				'Title exceeds 256 characters (got 300)'
+			)
+		}
 	})
 })
 
 describe('error classes', () => {
-	test('should create WebhookError with all properties', () => {
-		const error = new WebhookError('Request failed', 500, 1000)
-
-		expect(error.message).toBe('Request failed')
-		expect(error.statusCode).toBe(500)
-		expect(error.retryAfter).toBe(1000)
-		expect(error.name).toBe('WebhookError')
-		expect(error).toBeInstanceOf(Error)
+	test('hierarchy and names', () => {
+		const errors = [
+			new ValidationError('x', 'f'),
+			new WebhookError('x', 400),
+			new RateLimitError(5000),
+			new WebhookNotFoundError(),
+			new NetworkError(),
+			new TimeoutError(10),
+			new RequestAbortedError()
+		]
+		for (const error of errors) {
+			expect(error).toBeInstanceOf(EzHookError)
+			expect(error).toBeInstanceOf(Error)
+			expect(error.name).toBe(error.constructor.name)
+		}
+		expect(new RateLimitError(5000).retryAfter).toBe(5000)
+		expect(new RateLimitError().status).toBe(429)
+		expect(new WebhookNotFoundError().status).toBe(404)
+		expect(new TimeoutError(10)).toBeInstanceOf(NetworkError)
+		expect(new RequestAbortedError()).toBeInstanceOf(WebhookError)
+		expect(new WebhookError('x').status).toBe(0)
 	})
+})
 
-	test('should create WebhookError with optional properties', () => {
-		const error = new WebhookError('Request failed')
+describe('delay', () => {
+	test('resolves after the delay and rejects on abort', async () => {
+		delaySpy.mockRestore()
+		const start = Date.now()
+		await RequestClientModule.delay(10)
+		expect(Date.now() - start).toBeGreaterThanOrEqual(5)
 
-		expect(error.message).toBe('Request failed')
-		expect(error.statusCode).toBeUndefined()
-		expect(error.retryAfter).toBeUndefined()
-	})
-
-	test('should create RateLimitError with retryAfter', () => {
-		const error = new RateLimitError(5000)
-
-		expect(error.message).toBe('Rate limit exceeded')
-		expect(error.statusCode).toBe(429)
-		expect(error.retryAfter).toBe(5000)
-		expect(error.name).toBe('RateLimitError')
-		expect(error).toBeInstanceOf(WebhookError)
-	})
-
-	test('should create RateLimitError without retryAfter', () => {
-		const error = new RateLimitError()
-
-		expect(error.message).toBe('Rate limit exceeded')
-		expect(error.statusCode).toBe(429)
-		expect(error.retryAfter).toBeUndefined()
+		const controller = new AbortController()
+		const pending = RequestClientModule.delay(10_000, controller.signal)
+		controller.abort(new Error('stop'))
+		expect(pending).rejects.toThrow('stop')
+		delaySpy = spyOn(RequestClientModule, 'delay').mockImplementation(() =>
+			Promise.resolve()
+		)
 	})
 })

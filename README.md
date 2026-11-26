@@ -1,245 +1,203 @@
 <div align="center">
-  <h1>EZ Hook - TypeScript/JavaScript</h1>
+  <h1>EZ Hook</h1>
+  <p>Zero-dependency, fully typed Discord webhooks for Node, Bun, Deno, Cloudflare Workers, Vercel and the browser.</p>
 </div>
-
-Zero dependency, TypeScript/JavaScript library for sending Discord webhooks.
-<br>
-Useful for edge runtimes, Cloudflare Workers, Vercel, Deno, etc.
-<br>
-Create embeds using builder methods with flexible parameter options - pass objects or individual values for customization.
-<br>
-### Built-in Input Validation Errors
-
-The hook throws validation errors in the following cases:
-
-- **Size Constraints**:
-  - Content exceeds maximum allowed length
-  - Content is shorter than minimum required length
-  - Field size is larger than permitted limit
-  - Field size is smaller than required minimum
-
-- **Invalid Content**:
-  - Content format doesn't match required pattern
-  - Content contains invalid characters
-  - Content structure violates specified rules
-
-These validations comply with Discord's limits.
-
-### Discord Webhook Limits
-
-- **Content Limits**:
-  - Message content: 2000 characters
-  - Embed title: 256 characters
-  - Embed description: 4096 characters
-  - Embed fields: Up to 25 fields
-  - Embed field name: 256 characters
-  - Embed field value: 1024 characters
-  - Embed footer text: 2048 characters
-  - Embed author name: 256 characters
-  - Total embeds per message: 10
-  - Total character limit across all embeds: 6000 characters
-
-- **Media Limits**:
-  - Image URLs: 2048 characters
-  - Thumbnail URLs: 2048 characters
-  - Author icon URLs: 2048 characters
-  - Footer icon URLs: 2048 characters
-
-- **Rate Limits**:
-  - Default rate limit: 30 requests per minute per webhook
-  - Responses include retry-after header when rate limited
-
-These limits are enforced by Discord's API and this library validates inputs against these limits to prevent API errors.
-
-## Install
-
-Install from npm:
-
-- `npm install @teever/ez-hook`
-- `pnpm add @teever/ez-hook`
-- `yarn add @teever/ez-hook`
-- `bun add @teever/ez-hook`
-
-Install from JSR:
-
-- `deno add @teever/ez-hook`
-- `npx jsr add @teever/ez-hook`
-- `yarn dlx jsr add @teever/ez-hook`
-- `pnpm dlx jsr add @teever/ez-hook`
-- `bunx jsr add @teever/ez-hook`
-
-
-# Features
-
-- Zero dependencies
-- TypeScript support
-- Automatic retry on rate limits and server errors
-- Configurable retry behavior
-- Fluent builder API
-- Overloaded methods for simpler usage
-- Structured responses with status/retry metadata
-
-## Size
-
-Current size metrics:
-
-- Entry stub: `223 B` raw
-- Published runtime JS: `20.3 kB` total across `dist/**/*.js`
-- npm package: `20.6 kB` tarball / `82.4 kB` unpacked
-
-Re-measure locally with:
-
-```sh
-bun run size
-```
-
-## Response shape
-
-`send`, `modify`, and `get` return a `RequestResult` object:
-- `ok`: boolean success indicator
-- `status`: HTTP status code (0 on network failure)
-- `retryAfter`: milliseconds until retry if provided by Discord
-- `bodyText`: raw response text, when present
-- `error`: message for non-OK responses
-
-Input validation errors throw `ValidationError` with the field path and limit details.
-
-## Request options
-
-You can pass a second parameter with `signal`, custom `headers`, and `timeoutMs`:
-
-```ts
-const controller = new AbortController()
-const res = await hook.send({
-  headers: { 'X-Custom-Header': 'value' },
-  signal: controller.signal,
-  timeoutMs: 5000
-})
-```
-
-# Example
-
-
-## Basic Use
 
 ```ts
 import { Webhook } from '@teever/ez-hook'
 
-// Optional retry configuration 
-const retryConfig = {
-  maxRetries: 3,      // Maximum number of retries
-  baseDelay: 1000,    // Base delay in ms (1 second)
-  maxDelay: 60000     // Maximum delay in ms (60 seconds)
-} // Also the default configuration
+const hook = new Webhook(process.env.DISCORD_WEBHOOK_URL!)
 
-const hook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz', retryConfig)
-
-hook
-  .setUsername('Username')
-  .setContent('Lorem ipsum dolor sit amet, consectetur adipiscing elit.')
-
-const result = await hook.send()
-
-if (!result.ok) {
-  console.error('Webhook failed', result)
-}
-
+await hook.send('Deploy finished ✅')
 ```
 
-## Custom Embeds (Rich Message)
+## Features
+
+- **Zero dependencies**, built on `fetch`, `FormData` and `Blob`
+- **One call to send**: a string, or a full message object with embeds, files, threads and flags
+- **Typed errors**: `ValidationError` before the request is made, `WebhookError` with Discord's status, code and readable details after
+- **Automatic retries** for rate limits (respects `retry_after`), server errors and network errors, without double-posting messages
+- **Full message lifecycle**: send, get, edit and delete messages, plus get, modify and delete the webhook
+- **Every Discord limit is checked**, including the 6000-character embed total, with exact paths like `embeds[1].fields[3].value`
+- Timeouts and `AbortSignal` support, fluent `Embed` builder, ESM and type definitions
+
+> Upgrading from 0.3.x/0.4.x? `send()` now **throws** instead of returning `{ ok }`. See the [migration guide](./CHANGELOG.md#migrating-from-03x).
+
+## Install
+
+```sh
+npm install @teever/ez-hook     # or pnpm add / yarn add / bun add
+deno add jsr:@teever/ez-hook    # or npx jsr add @teever/ez-hook
+```
+
+## Usage
+
+### Send a message
 
 ```ts
 import { Embed, Webhook } from '@teever/ez-hook'
 
-const hook = new Webhook('https://discord.com/api/webhooks/1234567890/abcdefghijklmnopqrstuvwxyz')
+const hook = new Webhook(url, {
+  username: 'Deploy Bot',          // defaults for every message
+  allowedMentions: { parse: [] },  // never ping @everyone by accident
+})
 
-const embed = new Embed()
-embed
-  .setTitle('Embed Title')
-  .setDescription('Embed Description')
-  // Use hex string or number for color
-  .setColor('#ffffff')  // (Note: must be prefixed with #)
-  // Example number for color
-  .setColor(12345)
-  // Simple method overload
-  .setThumbnail('https://example.com/image.png')  
-  // Or use full object
-  .setThumbnail({
-    url: 'https://example.com/image.png',
-    height: 100,
-    width: 100
-  })
-  // Simple author setting
-  .setAuthor('Author Name', 'https://discord.com', 'https://example.com/icon.png')
-  // Or use full object
-  .setAuthor({
-    name: 'Author Name',
-    icon_url: 'https://example.com/icon.png',
-    url: 'https://discord.com'
-  })
-  // Simple footer setting
-  .setFooter('Footer Text', 'https://example.com/icon.png')
-  // Or use full object
-  .setFooter({
-    text: 'Footer Text',
-    icon_url: 'https://example.com/icon.png'
-  })
-  .setTimestamp()
-  // Simple field adding
-  .addField('Field 1', 'Value 1', true)
-  // Or use full object
-  .addField({
-    name: 'Field 2',
-    value: 'Value 2',
-    inline: true
-  })
+const message = await hook.send({
+  content: 'Nightly report',
+  embeds: [
+    new Embed()
+      .setTitle('Build #128')
+      .setColor('#00ff00')
+      .addField('Duration', '4m 12s', true)
+      .addField('Tests', '312 passed', true)
+      .setTimestamp(),
+    { title: 'Coverage', description: '91.2%' }, // plain objects work too
+  ],
+  files: [{ filename: 'report.json', data: JSON.stringify(report) }],
+  flags: ['SuppressNotifications'],
+})
 
-const res = await hook.addEmbed(embed).send()
-
-if (!res.ok) {
-  console.error('Webhook failed', res)
-}
-
+console.log(message.id) // the created message, typed
 ```
 
-## Error Handling
-
-EZ-Hook provides typed error classes for precise error handling:
+### Edit and delete messages
 
 ```ts
-import {
-  Webhook,
-  ValidationError,
-  RateLimitError,
-  WebhookError,
-  WebhookNotFoundError
-} from '@teever/ez-hook'
+const status = await hook.send({ embeds: [new Embed().setTitle('Deploying...')] })
+await hook.editMessage(status.id, { embeds: [new Embed().setTitle('Deployed ✅')] })
+await hook.deleteMessage(status.id)
+```
 
-const hook = new Webhook('https://discord.com/api/webhooks/...')
+### Threads and forums
+
+```ts
+await hook.send({ content: 'In a thread', threadId: '123456789' })
+await hook.send({ content: 'New forum post', threadName: 'Incident #42', appliedTags: ['987'] })
+```
+
+### Files
+
+`data` can be a string, `Blob`, `ArrayBuffer` or typed array (such as a `Uint8Array` or Node `Buffer`). Up to 10 files per message.
+
+```ts
+await hook.send({
+  files: [
+    { filename: 'log.txt', data: logText },
+    { filename: 'chart.png', data: pngBytes, contentType: 'image/png', description: 'CPU usage' },
+    { filename: 'data.bin', data: base64String, encoding: 'base64' },
+  ],
+})
+```
+
+### Builder style
+
+The setters build a draft that `send()` uses. A message passed to `send()` overrides it.
+
+```ts
+await new Webhook(url)
+  .setUsername('CI')
+  .setContent('Build passed')
+  .addEmbed(new Embed().setTitle('main @ 3f2a1c'))
+  .send()
+```
+
+The draft stays on the instance after sending. Call `hook.clear()` to reset it, or pass the message to `send()` directly when reusing one `Webhook`.
+
+## Error handling
+
+Every method that talks to Discord throws on failure:
+
+```ts
+import { RateLimitError, ValidationError, WebhookError, WebhookNotFoundError } from '@teever/ez-hook'
 
 try {
-  hook.setContent('Hello!')
-  await hook.send()
+  await hook.send(message)
 } catch (error) {
   if (error instanceof ValidationError) {
-    console.error(`Validation failed: ${error.field}`)
-    console.error(`Max: ${error.maxLength}, Actual: ${error.actualLength}`)
-  } else if (error instanceof RateLimitError) {
-    console.error(`Rate limited! Retry after ${error.retryAfter}ms`)
+    // Nothing was sent. error.field is e.g. "embeds[0].fields[2].value"
   } else if (error instanceof WebhookNotFoundError) {
-    console.error('Webhook URL is invalid or deleted')
+    // Webhook was deleted or the URL is wrong
+  } else if (error instanceof RateLimitError) {
+    // Still rate limited after retries; error.retryAfter is in ms
   } else if (error instanceof WebhookError) {
-    console.error(`HTTP error ${error.statusCode}: ${error.message}`)
+    // error.status, error.code (Discord JSON code), error.body
+    // error.message: "Invalid Form Body (code 50035): embeds.0.description: Must be 4096 or fewer in length."
   }
 }
 ```
 
-## Examples
+| Error | When |
+| --- | --- |
+| `ValidationError` | Input breaks a Discord limit. Thrown before any request. |
+| `WebhookError` | Discord returned an error status. Base class of the errors below. |
+| `WebhookNotFoundError` | 404: unknown webhook or message. |
+| `RateLimitError` | 429 after all retries, or `retry_after` is longer than `retry.maxDelay`. |
+| `NetworkError` | No response (`status` is 0). |
+| `TimeoutError` | `timeoutMs` exceeded. Extends `NetworkError`. |
+| `RequestAbortedError` | The `signal` you passed was aborted. Extends `NetworkError`. |
 
-See the [examples](./examples) directory for more usage patterns:
+All of them extend `EzHookError`.
 
-- [Basic usage](./examples/02-basic-usage.ts) - simple messages, overrides, TTS
-- [Multiple embeds](./examples/03-multiple-embeds.ts) - dashboards, catalogs, leaderboards  
-- [Embed features](./examples/04-embed-features.ts) - all embed options, colors, fields
-- [Webhook management](./examples/05-webhook-management.ts) - get/modify webhooks
-- [Error handling](./examples/06-error-handling.ts) - comprehensive error patterns
+If you'd rather not use `try/catch`, use `trySend`:
+
+```ts
+const result = await hook.trySend('Hello')
+if (!result.ok) console.error(result.error.message)
+else console.log(result.data.id)
+```
+
+## Options
+
+```ts
+const hook = new Webhook(url, {
+  retry: { maxRetries: 3, baseDelay: 1000, maxDelay: 60_000 }, // defaults
+  timeoutMs: 10_000,                // per attempt
+  headers: { 'User-Agent': 'my-app' },
+  username: 'Bot',                  // default username
+  avatarUrl: 'https://…',           // default avatar
+  allowedMentions: { parse: [] },   // default allowed mentions
+})
+
+// Per request
+await hook.send('Hi', { signal: AbortSignal.timeout(5000), headers: {}, timeoutMs: 2000 })
+await hook.send('Fire and forget', { wait: false }) // returns void
+```
+
+Retries happen on 429 (after Discord's `retry_after`), on 5xx (exponential backoff with jitter), and on network errors. Network errors are only retried for GET, PATCH and DELETE, so a lost response never causes a duplicate message.
+
+## API
+
+| Method | Returns |
+| --- | --- |
+| `send(message?, options?)` | `Promise<IMessage>` (`void` with `wait: false`) |
+| `trySend(message?, options?)` | `Promise<Result<IMessage>>` |
+| `getMessage(id, { threadId? })` | `Promise<IMessage>` |
+| `editMessage(id, edit, options?)` | `Promise<IMessage>` |
+| `deleteMessage(id, { threadId? })` | `Promise<void>` |
+| `get()` | `Promise<IWebhookResponse>` |
+| `modify({ name?, avatar? })` | `Promise<IWebhookResponse>` |
+| `deleteWebhook()` | `Promise<void>` |
+| `isValid()` | `Promise<boolean>`, never throws |
+
+See [docs.md](./docs.md) for the full reference, and [examples](./examples) for more patterns.
+
+## Discord limits
+
+ez-hook checks these limits before sending (exported as `Limits`):
+
+| | Limit |
+| --- | --- |
+| Content | 2000 characters |
+| Username override | 80 characters |
+| Embeds per message | 10 |
+| Files per message | 10 |
+| Embed title / description | 256 / 4096 characters |
+| Fields per embed | 25 |
+| Field name / value | 256 / 1024 characters |
+| Footer text / author name | 2048 / 256 characters |
+| All embeds combined | 6000 characters |
+| Thread name | 100 characters |
+
+## License
+
+MIT

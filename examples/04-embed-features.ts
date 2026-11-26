@@ -13,7 +13,7 @@ async function _fullFeaturedEmbed() {
 
 	const embed = new Embed()
 		.setTitle('Complete Embed Example')
-		.setURL('https://example.com')
+		.setUrl('https://example.com')
 		.setDescription(
 			'This embed demonstrates all available features including author, footer, fields, images, and more.'
 		)
@@ -71,7 +71,7 @@ async function _gitCommitNotification() {
 
 	const embed = new Embed()
 		.setTitle(`[${commit.repo}:${commit.branch}] 1 new commit`)
-		.setURL(`https://github.com/${commit.repo}/commit/${commit.hash}`)
+		.setUrl(`https://github.com/${commit.repo}/commit/${commit.hash}`)
 		.setColor('#24292e')
 		.setAuthor(
 			commit.author,
